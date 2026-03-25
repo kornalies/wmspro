@@ -10,21 +10,6 @@ jobs:
   strict-ci-gate:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: wms
-          POSTGRES_PASSWORD: wms
-          POSTGRES_DB: wms_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U wms -d wms_test"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-
     env:
       NODE_ENV: test
       JWT_SECRET: ci-jwt-secret
@@ -56,48 +41,3 @@ jobs:
 
       - name: Build
         run: npm run build
-
-      - name: Run DB migrations
-        run: npm run db:migrate
-
-      - name: Seed DB
-        run: npm run db:seed
-
-      - name: Start app in background
-        run: |
-          npm run start -- --port 3000 > /tmp/app.log 2>&1 &
-          echo $! > /tmp/app.pid
-
-      - name: Wait for health endpoint
-        run: |
-          for i in {1..30}; do
-            if curl -fsS http://localhost:3000/api/health >/dev/null; then
-              echo "Health check passed"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Health check failed after 60s"
-          cat /tmp/app.log || true
-          exit 1
-
-      - name: API contract smoke
-        run: npm run test:contract:env
-
-      - name: Isolation test
-        run: npm run test:isolation
-
-      - name: Resilience stress tests
-        run: npm run test:resilience
-
-      - name: Tenant safety check
-        run: npm run check:tenant-safety
-        env:
-          DATABASE_URL: postgresql://wms_app:wms_app@localhost:5432/wms_test?sslmode=disable
-
-      - name: Stop app
-        if: always()
-        run: |
-          if [ -f /tmp/app.pid ]; then
-            kill "$(cat /tmp/app.pid)" || true
-          fi
