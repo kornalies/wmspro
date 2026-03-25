@@ -51,8 +51,8 @@ jobs:
       - name: Validate CI environment variables
         run: npm run ci:validate-env
 
-      - name: Web quality gate (lint + contract + isolation)
-        run: npm run quality:gate:web
+      - name: Lint
+        run: npm run lint
 
       - name: Build
         run: npm run build
@@ -80,6 +80,12 @@ jobs:
           echo "Health check failed after 60s"
           cat /tmp/app.log || true
           exit 1
+
+      - name: API contract smoke
+        run: npm run test:contract:env
+
+      - name: Isolation test
+        run: npm run test:isolation
 
       - name: Resilience stress tests
         run: npm run test:resilience

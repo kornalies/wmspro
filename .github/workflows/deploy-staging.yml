@@ -2,8 +2,6 @@ name: Deploy Staging
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main" ]
 
 concurrency:
   group: deploy-staging
@@ -49,4 +47,3 @@ jobs:
           sudo systemctl restart wmspro
           curl -fsS http://127.0.0.1:3000/api/health
           EOF
-
