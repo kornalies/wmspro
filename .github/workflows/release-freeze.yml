@@ -1,0 +1,15 @@
+name: Release Freeze
+
+on:
+  push:
+    branches: [ release ]
+
+jobs:
+  block-direct-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block direct pushes to release
+        run: |
+          echo "Direct pushes to 'release' are frozen."
+          echo "Open a pull request and pass required checks before merge."
+          exit 1

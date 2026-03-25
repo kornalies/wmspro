@@ -1,0 +1,2 @@
+item_code,item_name,uom,hsn_code,standard_mrp,min_stock_alert,is_active
+ITM001,Sample SKU 1,PCS,8471,1200,20,true

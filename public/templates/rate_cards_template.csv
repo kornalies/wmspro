@@ -1,0 +1,2 @@
+client_code,rate_card_code,rate_card_name,effective_from,effective_to,charge_type,calc_method,uom,unit_rate,tax_rate
+CLI001,RC-STD,Standard Rate Card,2026-03-01,2027-02-28,INBOUND_HANDLING,PER_UNIT,UNIT,5.00,18

@@ -1,0 +1,142 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}}
+\fs24
+\b WMS Pro Invoicing SOP (Current System)\b0\line
+Version Date: 19 Mar 2026\line
+\line
+\b 1. Purpose\b0\line
+This SOP defines how invoicing works in current WMS Pro and how teams should run daily billing, exception handling, invoice finalization, payment posting, and month-end closure.\line
+\line
+\b 2. Scope\b0\line
+Applies to Billing Ops, Finance, and Review/Approver roles for all active clients and warehouses in a tenant company.\line
+\line
+\b 3. Core System Flow (As Implemented)\b0\line
+1. Operational events create billing transactions:\line
+   - GRN Confirm -> INBOUND_HANDLING staged\line
+   - DO Dispatch -> OUTBOUND_HANDLING staged\line
+   - VAS Complete -> VAS staged\line
+   - Storage Snapshot Job -> STORAGE staged\line
+2. Rating engine resolves charge using active rate master/details by client, date, charge type, item.\line
+3. If resolved, transaction status = UNBILLED. If not resolved, status = UNRATED.\line
+4. Draft invoice generation picks UNBILLED transactions by client and period and creates invoice header/lines/tax lines.\line
+5. Linked transactions are marked BILLED with invoice_id.\line
+6. Invoice finalize allowed only from DRAFT and compliance guard blocks invalid zero-taxable operational invoices.\line
+7. Payments update paid amount, balance, and status (PAID/PENDING/OVERDUE).\line
+\line
+\b 4. Role-Wise Responsibilities\b0\line
+\b 4.1 Billing Ops\b0\line
+- Run billing preview and review warnings.\line
+- Process Unbilled Activities and Unrated Queue.\line
+- Raise/fix rate-card mapping gaps with Finance.\line
+- Reprocess valid unrated transactions after master-data fix.\line
+- Prepare draft invoices for Finance validation.\line
+\line
+\b 4.2 Finance\b0\line
+- Validate draft invoice values, tax split, and customer terms.\line
+- Finalize compliant draft invoices.\line
+- Record payments and monitor balances/overdues.\line
+- Approve Ignore-with-Reason actions for exceptions.\line
+\line
+\b 4.3 Finance Review/Approver\b0\line
+- Review escalated exceptions (high impact/contract ambiguity).\line
+- Approve or reject remediation notes with audit comments.\line
+\line
+\b 5. Daily Billing Run SOP\b0\line
+\b Step 1: Set Billing Scope\b0\line
+- Open Finance > Billing.\line
+- Set Date From/Date To, Client filter, Warehouse filter.\line
+- Click Apply.\line
+\line
+\b Step 2: Check Unrated Queue First\b0\line
+- Open Unrated Queue tab.\line
+- For each row, determine reason (missing active rate, missing contract, tax issue, etc.).\line
+- Fix rate card/config/source data as required.\line
+- Use Reprocess once fixed.\line
+- Use Void only for true invalid/duplicate business events.\line
+\line
+\b Step 3: Review Exceptions\b0\line
+- Open Exceptions tab.\line
+- Prioritize HIGH severity first.\line
+- For each exception, action only with mandatory:\line
+  - Root Cause\line
+  - Resolution Note\line
+- Action options:\line
+  - Resolve (issue corrected and verified)\line
+  - Ignore with Reason (approved business exception)\line
+  - Send to Finance Review (needs approval)\line
+\line
+\b Step 4: Validate Unbilled Activities\b0\line
+- Confirm expected charge type, qty, event date, and amount.\line
+- Ensure no blocked exceptions remain for the run scope.\line
+\line
+\b Step 5: Generate Invoice Drafts\b0\line
+- Run draft generation for selected period (or cycle run if configured).\line
+- Verify generated count vs expected billable clients.\line
+\line
+\b 6. Invoice Validation and Finalization SOP\b0\line
+\b Step 1: Draft Validation\b0\line
+- Check invoice lines, taxable amount, and GST components.\line
+- Verify due date and billing cycle profile.\line
+\line
+\b Step 2: Compliance Check\b0\line
+- Ensure invoice has non-zero taxable amount when operational activity exists.\line
+- If blocked, fix rates/master data and regenerate draft.\line
+\line
+\b Step 3: Finalize Invoice\b0\line
+- Finalize only DRAFT invoices.\line
+- Resulting status becomes FINALIZED / OVERDUE / PAID based on balance and due date logic.\line
+\line
+\b 7. Payment Posting SOP\b0\line
+1. Open invoice payments.\line
+2. Enter payment date, amount, mode, reference, notes.\line
+3. Validate: payment must not exceed outstanding balance.\line
+4. Save payment; system updates paid amount, balance, and status.\line
+5. Verify ledger sync completed.\line
+\line
+\b 8. Exception Playbook (Operational)\b0\line
+\b 8.1 Missing Active Rate (HIGH)\b0\line
+- Validate client, event date, charge type, item mapping, effective dates, active flag.\line
+- Create/fix rate detail, then reprocess transaction.\line
+\line
+\b 8.2 Zero-Value Derived Line (MEDIUM)\b0\line
+- Check quantity/UOM, unit_rate, min_charge, free_qty, slab config.\line
+- If contractual zero is valid, Ignore with approval note. Else fix and reprocess.\line
+\line
+\b 8.3 Invalid Tax Mapping (HIGH)\b0\line
+- Validate GST rate/tax code and interstate vs intrastate determination.\line
+- Correct mapping and regenerate/reprocess.\line
+\line
+\b 8.4 Duplicate Candidate (MEDIUM)\b0\line
+- Keep one valid event, void duplicates with reason.\line
+\line
+\b 9. Month-End Closure Checklist\b0\line
+1. Freeze operational posting window for closing period (as per policy).\line
+2. Clear UNRATED queue or document approved carry-forward list.\line
+3. Resolve/approve open HIGH exceptions.\line
+4. Generate final draft batch for period.\line
+5. Validate client totals and tax totals.\line
+6. Finalize all approved invoices.\line
+7. Export invoice register, aging, trial-balance summary.\line
+8. Reconcile: invoice totals vs billing transactions vs ledger totals.\line
+9. Publish closure sign-off (Billing Ops + Finance Approver).\line
+\line
+\b 10. Controls and Audit Requirements\b0\line
+- No exception closure without root cause and resolution note.\line
+- No direct void/unbill for billed transactions linked to invoice (use adjustment workflow).\line
+- Use idempotency keys for critical generate/finalize/payment APIs in integrations.\line
+- Keep all run keys and job run logs for traceability.\line
+\line
+\b 11. KPIs to Monitor Daily\b0\line
+- UNRATED count\line
+- Open exceptions count (especially HIGH)\line
+- Draft generation success rate\line
+- Overdue balance and collection efficiency\line
+- Reprocess success rate\line
+\line
+\b 12. Escalation Matrix\b0\line
+- Billing Ops: initial triage and remediation\line
+- Finance: approval for ignore/review decisions\line
+- System Admin/Product: recurring rule/config defects\line
+\line
+\b End of SOP\b0\line
+}

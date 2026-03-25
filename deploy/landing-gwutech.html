@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GWU Software & Solutions  WMSPro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --sky: #0EA5E9;
+    --sky-light: #38BDF8;
+    --sky-deep: #0284C7;
+    --slate-900: #0F172A;
+    --slate-800: #1E293B;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-400: #94A3B8;
+    --slate-200: #E2E8F0;
+    --slate-100: #F1F5F9;
+    --slate-50: #F8FAFC;
+    --white: #FFFFFF;
+    --teal: #14B8A6;
+    --accent: #F59E0B;
+    --radius: 14px;
+    --radius-lg: 22px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--white);
+    color: var(--slate-800);
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4, .nav-brand { font-family: 'Syne', sans-serif; }
+
+  /*  NAV  */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--slate-200);
+    padding: 0 40px;
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-brand {
+    font-size: 1.25rem; font-weight: 700; color: var(--slate-900);
+    display: flex; align-items: center; gap: 10px; text-decoration: none;
+  }
+  .nav-brand-badge {
+    background: linear-gradient(135deg, var(--sky-deep), var(--teal));
+    color: white; font-size: 0.65rem; font-weight: 700;
+    padding: 3px 8px; border-radius: 6px; letter-spacing: 0.05em;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .nav-links {
+    display: flex; gap: 32px; list-style: none;
+  }
+  .nav-links a {
+    font-size: 0.875rem; font-weight: 500; color: var(--slate-600);
+    text-decoration: none; transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--sky-deep); }
+  .nav-cta {
+    display: flex; gap: 10px; align-items: center;
+  }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px;
+    font-family: 'DM Sans', sans-serif; font-weight: 500; font-size: 0.875rem;
+    cursor: pointer; transition: all 0.2s; text-decoration: none; padding: 9px 20px; border: none; }
+  .btn-ghost { background: transparent; color: var(--slate-700); border: 1px solid var(--slate-200); }
+  .btn-ghost:hover { background: var(--slate-100); border-color: var(--slate-300); }
+  .btn-primary { background: var(--sky-deep); color: white; }
+  .btn-primary:hover { background: #0369A1; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(2,132,199,0.3); }
+  .btn-lg { padding: 14px 28px; font-size: 1rem; border-radius: 10px; }
+  .btn-outline-lg { padding: 13px 28px; font-size: 1rem; border-radius: 10px;
+    background: transparent; border: 1.5px solid var(--sky-deep); color: var(--sky-deep); }
+  .btn-outline-lg:hover { background: rgba(14,165,233,0.06); transform: translateY(-1px); }
+
+  /*  SECTIONS  */
+  section { padding: 96px 40px; }
+  .container { max-width: 1180px; margin: 0 auto; }
+
+  /*  HERO  */
+  #hero {
+    padding-top: 140px; padding-bottom: 80px;
+    background: linear-gradient(160deg, var(--slate-50) 0%, #EFF8FF 50%, var(--white) 100%);
+    position: relative; overflow: hidden;
+  }
+  #hero::before {
+    content: ''; position: absolute; top: -120px; right: -120px;
+    width: 600px; height: 600px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(14,165,233,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  #hero::after {
+    content: ''; position: absolute; bottom: -80px; left: -80px;
+    width: 400px; height: 400px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(20,184,166,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.2);
+    border-radius: 50px; padding: 6px 14px; font-size: 0.8rem; font-weight: 500;
+    color: var(--sky-deep); margin-bottom: 24px;
+  }
+  .hero-badge span { width: 7px; height: 7px; border-radius: 50%; background: var(--sky); display: inline-block; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
+  .hero-title {
+    font-size: clamp(2.2rem, 4vw, 3.2rem); font-weight: 800; line-height: 1.15;
+    color: var(--slate-900); margin-bottom: 20px; letter-spacing: -0.02em;
+  }
+  .hero-title .accent { color: var(--sky-deep); }
+  .hero-subtitle {
+    font-size: 1.1rem; color: var(--slate-600); line-height: 1.7; margin-bottom: 36px;
+    font-weight: 400; max-width: 480px;
+  }
+  .hero-cta { display: flex; gap: 14px; flex-wrap: wrap; }
+  .hero-trust {
+    margin-top: 40px; display: flex; align-items: center; gap: 20px;
+    font-size: 0.8rem; color: var(--slate-500);
+  }
+  .hero-trust-item { display: flex; align-items: center; gap: 6px; }
+  .hero-trust-item svg { color: var(--teal); }
+
+  /*  MOCK SCREENSHOT  */
+  .screenshot-wrap {
+    position: relative;
+    animation: floatUp 0.8s ease-out both;
+  }
+  @keyframes floatUp { from{opacity:0;transform:translateY(30px)} to{opacity:1;transform:translateY(0)} }
+  .screenshot-card {
+    background: var(--slate-900); border-radius: var(--radius-lg);
+    overflow: hidden; box-shadow: 0 40px 80px rgba(15,23,42,0.2), 0 8px 24px rgba(15,23,42,0.12);
+    border: 1px solid var(--slate-700);
+  }
+  .sc-topbar {
+    background: var(--slate-800); padding: 12px 16px;
+    display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--slate-700);
+  }
+  .sc-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .sc-title { color: var(--slate-400); font-size: 0.75rem; margin-left: 8px; font-family: 'DM Sans'; }
+  .sc-body { padding: 16px; display: grid; grid-template-columns: 160px 1fr; gap: 12px; min-height: 280px; }
+  .sc-sidebar { display: flex; flex-direction: column; gap: 4px; }
+  .sc-nav-item {
+    padding: 8px 12px; border-radius: 7px; font-size: 0.75rem;
+    color: var(--slate-500); cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  .sc-nav-item.active { background: rgba(14,165,233,0.15); color: var(--sky-light); }
+  .sc-nav-icon { width: 14px; height: 14px; border-radius: 3px; background: currentColor; opacity: 0.6; }
+  .sc-main { display: flex; flex-direction: column; gap: 10px; }
+  .sc-stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .sc-stat {
+    background: var(--slate-800); border-radius: 8px; padding: 10px 12px;
+    border: 1px solid var(--slate-700);
+  }
+  .sc-stat-label { font-size: 0.65rem; color: var(--slate-500); margin-bottom: 4px; }
+  .sc-stat-val { font-size: 1rem; font-weight: 700; color: var(--white); font-family: 'Syne'; }
+  .sc-stat-val.up { color: #34D399; }
+  .sc-stat-val.warn { color: var(--accent); }
+  .sc-table { background: var(--slate-800); border-radius: 8px; border: 1px solid var(--slate-700); overflow: hidden; flex: 1; }
+  .sc-table-head { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; padding: 8px 12px;
+    border-bottom: 1px solid var(--slate-700); }
+  .sc-table-head span { font-size: 0.65rem; color: var(--slate-500); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .sc-table-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; padding: 7px 12px;
+    border-bottom: 1px solid rgba(51,65,85,0.5); }
+  .sc-table-row span { font-size: 0.72rem; color: var(--slate-300); }
+  .badge-green { background: rgba(52,211,153,0.15); color: #34D399; padding: 2px 7px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; }
+  .badge-yellow { background: rgba(245,158,11,0.15); color: var(--accent); padding: 2px 7px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; }
+  .badge-blue { background: rgba(14,165,233,0.15); color: var(--sky-light); padding: 2px 7px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; }
+
+  /*  SECTION LABELS  */
+  .section-label {
+    display: inline-block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--sky-deep);
+    background: rgba(14,165,233,0.08); border-radius: 50px; padding: 4px 14px;
+    margin-bottom: 14px;
+  }
+  .section-title {
+    font-size: clamp(1.8rem, 3vw, 2.5rem); font-weight: 800; line-height: 1.2;
+    color: var(--slate-900); letter-spacing: -0.02em; margin-bottom: 14px;
+  }
+  .section-sub {
+    font-size: 1.05rem; color: var(--slate-500); max-width: 560px; line-height: 1.7;
+  }
+  .section-header { margin-bottom: 56px; }
+  .section-header.center { text-align: center; }
+  .section-header.center .section-sub { margin: 0 auto; }
+
+  /*  PROBLEM / SOLUTION  */
+  #problem { background: var(--slate-50); }
+  .ps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  .ps-col-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid; display: flex; align-items: center; gap: 8px; }
+  .ps-col-label.pain { color: #EF4444; border-color: #FECACA; }
+  .ps-col-label.solution { color: #10B981; border-color: #A7F3D0; }
+  .ps-item {
+    display: flex; align-items: flex-start; gap: 14px; padding: 16px;
+    border-radius: 10px; margin-bottom: 10px; border: 1px solid;
+  }
+  .ps-item.pain { background: #FFF5F5; border-color: #FECACA; }
+  .ps-item.solution { background: #F0FDF9; border-color: #A7F3D0; }
+  .ps-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 1rem; }
+  .ps-icon.pain { background: #FEE2E2; }
+  .ps-icon.solution { background: #D1FAE5; }
+  .ps-text h4 { font-size: 0.9rem; font-weight: 600; color: var(--slate-800); margin-bottom: 4px; font-family: 'Syne'; }
+  .ps-text p { font-size: 0.82rem; color: var(--slate-500); line-height: 1.5; }
+
+  /*  MODULES  */
+  #modules { background: white; }
+  .modules-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .module-card {
+    border: 1px solid var(--slate-200); border-radius: var(--radius); padding: 28px;
+    transition: all 0.25s; position: relative; overflow: hidden; background: white;
+  }
+  .module-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--sky-deep), var(--teal));
+    transform: scaleX(0); transform-origin: left; transition: transform 0.3s;
+  }
+  .module-card:hover { box-shadow: 0 8px 32px rgba(14,165,233,0.12); transform: translateY(-3px); border-color: rgba(14,165,233,0.25); }
+  .module-card:hover::before { transform: scaleX(1); }
+  .mod-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center;
+    justify-content: center; font-size: 1.25rem; margin-bottom: 16px;
+    background: linear-gradient(135deg, rgba(14,165,233,0.1), rgba(20,184,166,0.1)); }
+  .mod-title { font-size: 1rem; font-weight: 700; color: var(--slate-900); margin-bottom: 8px; font-family: 'Syne'; }
+  .mod-desc { font-size: 0.85rem; color: var(--slate-500); line-height: 1.6; }
+  .mod-tags { margin-top: 14px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .mod-tag { font-size: 0.7rem; background: var(--slate-100); color: var(--slate-600);
+    padding: 3px 9px; border-radius: 5px; font-weight: 500; }
+
+  /*  WHY GWU  */
+  #why { background: var(--slate-900); }
+  #why .section-title { color: white; }
+  #why .section-label { background: rgba(14,165,233,0.15); color: var(--sky-light); }
+  #why .section-sub { color: var(--slate-400); }
+  .why-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+  .why-card {
+    background: var(--slate-800); border: 1px solid var(--slate-700);
+    border-radius: var(--radius); padding: 24px 20px; text-align: center;
+    transition: all 0.25s;
+  }
+  .why-card:hover { background: rgba(14,165,233,0.08); border-color: rgba(14,165,233,0.3); transform: translateY(-4px); }
+  .why-icon { font-size: 1.75rem; margin-bottom: 14px; display: block; }
+  .why-title { font-size: 0.875rem; font-weight: 700; color: white; margin-bottom: 8px; font-family: 'Syne'; line-height: 1.3; }
+  .why-desc { font-size: 0.78rem; color: var(--slate-500); line-height: 1.5; }
+
+  /*  INDUSTRIES  */
+  #industries { background: var(--slate-50); }
+  .industries-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+  .ind-card {
+    background: white; border: 1px solid var(--slate-200); border-radius: var(--radius);
+    padding: 28px 22px; text-align: center; transition: all 0.25s;
+  }
+  .ind-card:hover { box-shadow: 0 8px 28px rgba(14,165,233,0.1); transform: translateY(-4px); border-color: var(--sky-light); }
+  .ind-icon { font-size: 2rem; margin-bottom: 14px; display: block; }
+  .ind-title { font-size: 1rem; font-weight: 700; color: var(--slate-900); font-family: 'Syne'; margin-bottom: 8px; }
+  .ind-desc { font-size: 0.82rem; color: var(--slate-500); line-height: 1.6; }
+
+  /*  SCREENSHOTS  */
+  #screenshots { background: white; }
+  .screens-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .screen-ph {
+    border-radius: var(--radius); border: 1px solid var(--slate-200);
+    overflow: hidden; background: var(--slate-50);
+  }
+  .screen-ph-top {
+    background: var(--slate-800); height: 8px; display: flex; align-items: center;
+    padding: 0 10px; gap: 4px;
+  }
+  .screen-ph-top span { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .screen-ph-body { padding: 20px; }
+  .screen-ph-title { font-size: 0.8rem; font-weight: 700; color: var(--slate-700); margin-bottom: 10px; font-family: 'Syne'; }
+  .ph-bar { height: 8px; border-radius: 4px; margin-bottom: 6px; background: var(--slate-200); }
+  .ph-bar.sky { background: linear-gradient(90deg, var(--sky-deep), var(--sky-light)); }
+  .ph-bar.teal { background: linear-gradient(90deg, var(--teal), #5EEAD4); }
+  .ph-bar.slate { background: var(--slate-300); }
+  .ph-mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .ph-mini { background: var(--slate-200); border-radius: 6px; height: 48px; }
+  .screen-label { padding: 12px 20px; border-top: 1px solid var(--slate-200); font-size: 0.8rem; font-weight: 600; color: var(--slate-700); background: white; }
+  .coming-soon-badge {
+    display: inline-block; font-size: 0.65rem; font-weight: 700;
+    background: rgba(245,158,11,0.1); color: var(--accent); border: 1px solid rgba(245,158,11,0.3);
+    padding: 2px 8px; border-radius: 50px; margin-left: 6px; vertical-align: middle;
+  }
+
+  /*  CTA FOOTER  */
+  #cta {
+    background: linear-gradient(135deg, var(--sky-deep) 0%, #0369A1 50%, #0C4A6E 100%);
+    text-align: center; padding: 96px 40px;
+    position: relative; overflow: hidden;
+  }
+  #cta::before {
+    content: ''; position: absolute; top: -40%; left: 50%; transform: translateX(-50%);
+    width: 700px; height: 700px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,255,255,0.06) 0%, transparent 70%);
+  }
+  #cta .section-title { color: white; margin-bottom: 16px; }
+  #cta .section-sub { color: rgba(255,255,255,0.75); max-width: 520px; margin: 0 auto 40px; font-size: 1.05rem; }
+  .cta-buttons { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
+  .btn-white { background: white; color: var(--sky-deep); padding: 14px 28px; border-radius: 10px;
+    font-weight: 600; font-size: 1rem; cursor: pointer; transition: all 0.2s; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px; font-family: 'DM Sans'; border: none; }
+  .btn-white:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
+  .btn-ghost-white { background: transparent; border: 1.5px solid rgba(255,255,255,0.4); color: white;
+    padding: 13px 28px; border-radius: 10px; font-weight: 500; font-size: 1rem; cursor: pointer;
+    transition: all 0.2s; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+    font-family: 'DM Sans'; }
+  .btn-ghost-white:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.6); transform: translateY(-2px); }
+  .cta-contacts { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; }
+  .cta-contact-item { color: rgba(255,255,255,0.75); font-size: 0.875rem; display: flex; align-items: center; gap: 8px; }
+
+  /*  FOOTER BAR  */
+  footer {
+    background: var(--slate-900); padding: 28px 40px;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .footer-brand { color: white; font-family: 'Syne'; font-weight: 700; font-size: 0.95rem; }
+  .footer-brand span { color: var(--sky-light); }
+  .footer-copy { color: var(--slate-500); font-size: 0.8rem; }
+  .footer-links { display: flex; gap: 24px; }
+  .footer-links a { color: var(--slate-400); font-size: 0.8rem; text-decoration: none; }
+  .footer-links a:hover { color: var(--sky-light); }
+
+  /*  DIVIDER  */
+  .divider { height: 1px; background: var(--slate-100); }
+
+  /*  RESPONSIVE  */
+  @media (max-width: 900px) {
+    .hero-grid, .ps-grid { grid-template-columns: 1fr; }
+    .screenshot-wrap { display: none; }
+    .modules-grid { grid-template-columns: 1fr 1fr; }
+    .why-grid { grid-template-columns: repeat(2, 1fr); }
+    .industries-grid { grid-template-columns: repeat(2, 1fr); }
+    .screens-grid { grid-template-columns: 1fr; }
+    nav { padding: 0 20px; }
+    .nav-links { display: none; }
+    section { padding: 64px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<!--  NAV  -->
+<nav>
+  <a href="#" class="nav-brand">
+    GWU Software <span class="nav-brand-badge">WMSPro</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#modules">Modules</a></li>
+    <li><a href="#why">Why GWU</a></li>
+    <li><a href="#industries">Industries</a></li>
+    <li><a href="#screenshots">Product</a></li>
+  </ul>
+  <div class="nav-cta">
+    <a href="#cta" class="btn btn-ghost">Contact Sales</a>
+    <a href="#cta" class="btn btn-primary">Book Demo </a>
+  </div>
+</nav>
+
+<!--  HERO  -->
+<section id="hero">
+  <div class="container">
+    <div class="hero-grid">
+      <div class="hero-left" style="animation: floatUp 0.7s ease-out both;">
+        <div class="hero-badge">
+          <span></span> Now in Pilot  April 2025 Launch
+        </div>
+        <h1 class="hero-title">
+          Modern 3PL Warehouse Management for <span class="accent">Growing Logistics Businesses</span>
+        </h1>
+        <p class="hero-subtitle">
+          WMSPro is the purpose-built warehouse management system for 3PLs, fulfillment centers, and multi-client warehouses in South India  built by operators, for operators.
+        </p>
+        <div class="hero-cta">
+          <a href="#cta" class="btn btn-primary btn-lg">Book a Demo </a>
+          <a href="#cta" class="btn btn-outline-lg">Contact Sales</a>
+        </div>
+        <div class="hero-trust">
+          <div class="hero-trust-item">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Multi-tenant SaaS
+          </div>
+          <div class="hero-trust-item">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            AWS India Cloud
+          </div>
+          <div class="hero-trust-item">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Serial-level Tracking
+          </div>
+        </div>
+      </div>
+      <div class="screenshot-wrap" style="animation-delay:0.2s">
+        <div class="screenshot-card">
+          <div class="sc-topbar">
+            <div class="sc-dot" style="background:#EF4444"></div>
+            <div class="sc-dot" style="background:#F59E0B"></div>
+            <div class="sc-dot" style="background:#10B981"></div>
+            <span class="sc-title">WMSPro  Operations Dashboard</span>
+          </div>
+          <div class="sc-body">
+            <div class="sc-sidebar">
+              <div style="color:var(--slate-400);font-size:0.65rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:6px 12px;margin-bottom:6px;">NAVIGATION</div>
+              <div class="sc-nav-item active"><div class="sc-nav-icon"></div> Dashboard</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> GRN</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Delivery Orders</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Gate In/Out</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Stock View</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Billing</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Client Portal</div>
+              <div class="sc-nav-item"><div class="sc-nav-icon"></div> Labor</div>
+            </div>
+            <div class="sc-main">
+              <div class="sc-stat-row">
+                <div class="sc-stat">
+                  <div class="sc-stat-label">Total SKUs</div>
+                  <div class="sc-stat-val">4,821</div>
+                </div>
+                <div class="sc-stat">
+                  <div class="sc-stat-label">Pending GRN</div>
+                  <div class="sc-stat-val warn">12</div>
+                </div>
+                <div class="sc-stat">
+                  <div class="sc-stat-label">Dispatched Today</div>
+                  <div class="sc-stat-val up">38</div>
+                </div>
+                <div class="sc-stat">
+                  <div class="sc-stat-label">Active Clients</div>
+                  <div class="sc-stat-val">7</div>
+                </div>
+              </div>
+              <div class="sc-table">
+                <div class="sc-table-head">
+                  <span>Order Ref</span>
+                  <span>Client</span>
+                  <span>Status</span>
+                  <span>ETA</span>
+                </div>
+                <div class="sc-table-row">
+                  <span style="color:var(--sky-light)">DO-2024-1142</span>
+                  <span>Reliance Retail</span>
+                  <span><div class="badge-green">Dispatched</div></span>
+                  <span style="color:var(--slate-400)">Today</span>
+                </div>
+                <div class="sc-table-row">
+                  <span style="color:var(--sky-light)">GRN-2024-0891</span>
+                  <span>Blue Star Ltd</span>
+                  <span><div class="badge-yellow">Pending</div></span>
+                  <span style="color:var(--slate-400)">2h</span>
+                </div>
+                <div class="sc-table-row">
+                  <span style="color:var(--sky-light)">DO-2024-1140</span>
+                  <span>FedEx 3PL</span>
+                  <span><div class="badge-blue">In-Transit</div></span>
+                  <span style="color:var(--slate-400)">Tomorrow</span>
+                </div>
+                <div class="sc-table-row">
+                  <span style="color:var(--sky-light)">GRN-2024-0889</span>
+                  <span>TVS Supply</span>
+                  <span><div class="badge-green">Received</div></span>
+                  <span style="color:var(--slate-400)">Done</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  PROBLEM / SOLUTION  -->
+<section id="problem">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-label">The Challenge</div>
+      <h2 class="section-title">Most 3PLs are running on spreadsheets and legacy tools</h2>
+      <p class="section-sub">WMSPro replaces the chaos with a purpose-built platform designed for how South Indian 3PLs actually operate.</p>
+    </div>
+    <div class="ps-grid">
+      <div>
+        <div class="ps-col-label pain"> Pain Points</div>
+        <div class="ps-item pain">
+          <div class="ps-icon pain"></div>
+          <div class="ps-text">
+            <h4>Inventory Discrepancies</h4>
+            <p>Manual counts, lost stock, client complaints during audits  no single source of truth.</p>
+          </div>
+        </div>
+        <div class="ps-item pain">
+          <div class="ps-icon pain"></div>
+          <div class="ps-text">
+            <h4>Billing Errors</h4>
+            <p>Complex 3PL billing  storage, handling, value-adds  done manually on Excel, prone to revenue leakage.</p>
+          </div>
+        </div>
+        <div class="ps-item pain">
+          <div class="ps-icon pain"></div>
+          <div class="ps-text">
+            <h4>No Serial / Batch Visibility</h4>
+            <p>Can't track serialized goods or batches across GRN  storage  dispatch. Compliance risk.</p>
+          </div>
+        </div>
+        <div class="ps-item pain">
+          <div class="ps-icon pain"></div>
+          <div class="ps-text">
+            <h4>No Client Transparency</h4>
+            <p>Clients call and email for stock updates. No self-service portal. High support burden.</p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="ps-col-label solution"> WMSPro Solution</div>
+        <div class="ps-item solution">
+          <div class="ps-icon solution"></div>
+          <div class="ps-text">
+            <h4>Real-time Stock Visibility</h4>
+            <p>Live inventory dashboard  per client, per SKU, per location. Discrepancies caught instantly.</p>
+          </div>
+        </div>
+        <div class="ps-item solution">
+          <div class="ps-icon solution"></div>
+          <div class="ps-text">
+            <h4>3PL-Native Billing Engine</h4>
+            <p>Auto-calculate storage, handling, and value-added services per client contract. Zero revenue leakage.</p>
+          </div>
+        </div>
+        <div class="ps-item solution">
+          <div class="ps-icon solution"></div>
+          <div class="ps-text">
+            <h4>Serial & Batch Tracking</h4>
+            <p>Full traceability from inbound GRN to outbound dispatch. Barcode and RF scanner ready.</p>
+          </div>
+        </div>
+        <div class="ps-item solution">
+          <div class="ps-icon solution"></div>
+          <div class="ps-text">
+            <h4>Client Self-Service Portal</h4>
+            <p>Each client gets their own view  stock levels, pending orders, billing history. Zero support calls.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  MODULES  -->
+<section id="modules">
+  <div class="container">
+    <div class="section-header center">
+      <div class="section-label">Core Modules</div>
+      <h2 class="section-title">Everything your warehouse needs, built in</h2>
+      <p class="section-sub">Six purpose-built modules covering every warehouse operation  from gate-in to billing.</p>
+    </div>
+    <div class="modules-grid">
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Goods Receipt Note (GRN)</div>
+        <div class="mod-desc">Capture inbound shipments with serial/batch tracking, damage recording, and client-wise SKU mapping. Full GRN workflow from PO to putaway.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Serial Tracking</span>
+          <span class="mod-tag">Barcode</span>
+          <span class="mod-tag">Multi-client</span>
+        </div>
+      </div>
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Delivery Orders</div>
+        <div class="mod-desc">Create, manage and dispatch delivery orders with pick-list generation, packing verification, and dispatch confirmation. Full outbound workflow.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Pick & Pack</span>
+          <span class="mod-tag">Auto-Dispatch</span>
+        </div>
+      </div>
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Gate In / Gate Out</div>
+        <div class="mod-desc">Manage vehicle movement, driver details, material entry/exit at the gate. Complete dock management with timestamped logs.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Vehicle Log</span>
+          <span class="mod-tag">Dock Management</span>
+        </div>
+      </div>
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Stock Visibility</div>
+        <div class="mod-desc">Real-time inventory across all clients, SKUs, and storage zones. Aging stock alerts, slow-mover analysis, and bin-level visibility.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Live Dashboard</span>
+          <span class="mod-tag">Aging Alerts</span>
+          <span class="mod-tag">Bin Level</span>
+        </div>
+      </div>
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Billing Engine</div>
+        <div class="mod-desc">3PL-native billing for storage, handling, value-added services, and labeling. Contract-based rates per client with auto-invoice generation.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Contract Rates</span>
+          <span class="mod-tag">Auto Invoice</span>
+          <span class="mod-tag">Multi-service</span>
+        </div>
+      </div>
+      <div class="module-card">
+        <div class="mod-icon"></div>
+        <div class="mod-title">Client Portal</div>
+        <div class="mod-desc">Dedicated portal per client  view their stock, download dispatch reports, raise queries, and track orders. White-labeled access available.</div>
+        <div class="mod-tags">
+          <span class="mod-tag">Self-Service</span>
+          <span class="mod-tag">White Label</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:28px; text-align:center; padding:20px; background:var(--slate-50); border-radius:10px; border:1px solid var(--slate-200);">
+      <span style="font-size:0.85rem;color:var(--slate-600);">Also includes </span>
+      <strong style="font-size:0.85rem;color:var(--slate-800);">Labor Management</strong>
+      <span style="font-size:0.85rem;color:var(--slate-500);">  track manpower utilization, task assignments, shift performance, and productivity metrics per warehouse.</span>
+    </div>
+  </div>
+</section>
+
+<!--  WHY GWU  -->
+<section id="why">
+  <div class="container">
+    <div class="section-header center">
+      <div class="section-label">Why GWU</div>
+      <h2 class="section-title">Built different. Built for 3PLs.</h2>
+      <p class="section-sub">WMSPro isn't a generic inventory tool with 3PL tacked on. It's designed from the ground up for multi-client, multi-tenant warehouse operations.</p>
+    </div>
+    <div class="why-grid">
+      <div class="why-card">
+        <span class="why-icon"></span>
+        <div class="why-title">Serial-Level Tracking</div>
+        <div class="why-desc">Full chain of custody from GRN to dispatch  every serial number, every movement logged.</div>
+      </div>
+      <div class="why-card">
+        <span class="why-icon"></span>
+        <div class="why-title">3PL Billing Engine</div>
+        <div class="why-desc">Complex 3PL billing logic  storage, handling, VAS  built in, not bolted on.</div>
+      </div>
+      <div class="why-card">
+        <span class="why-icon"></span>
+        <div class="why-title">Multi-Tenant SaaS</div>
+        <div class="why-desc">Full tenant isolation. Each warehouse client operates independently on shared infrastructure.</div>
+      </div>
+      <div class="why-card">
+        <span class="why-icon"></span>
+        <div class="why-title">Operational Dashboards</div>
+        <div class="why-desc">MD-ready dashboards  stock health, billing status, client activity  at a glance.</div>
+      </div>
+      <div class="why-card">
+        <span class="why-icon"></span>
+        <div class="why-title">Enterprise-Ready Controls</div>
+        <div class="why-desc">RBAC with Client/Viewer/Admin roles. Audit logs, access controls, hosted on AWS India.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  INDUSTRIES  -->
+<section id="industries">
+  <div class="container">
+    <div class="section-header center">
+      <div class="section-label">Customer Fit</div>
+      <h2 class="section-title">Built for your type of operation</h2>
+      <p class="section-sub">WMSPro is designed for the 25 warehouse 3PL operator in South India looking to scale with proper systems.</p>
+    </div>
+    <div class="industries-grid">
+      <div class="ind-card">
+        <span class="ind-icon"></span>
+        <div class="ind-title">3PL Operators</div>
+        <div class="ind-desc">Multi-client warehouses managing inventory on behalf of brands and manufacturers. Full 3PL billing and client portal included.</div>
+      </div>
+      <div class="ind-card">
+        <span class="ind-icon"></span>
+        <div class="ind-title">Distributors</div>
+        <div class="ind-desc">Regional distributors handling high-SKU inventory with inbound, outbound, and returns management requirements.</div>
+      </div>
+      <div class="ind-card">
+        <span class="ind-icon"></span>
+        <div class="ind-title">Fulfillment Centers</div>
+        <div class="ind-desc">E-commerce and omnichannel fulfillment operations needing fast GRN, pick-pack, and dispatch workflows.</div>
+      </div>
+      <div class="ind-card">
+        <span class="ind-icon"></span>
+        <div class="ind-title">Multi-Client Warehouses</div>
+        <div class="ind-desc">Any warehouse managing stock for multiple clients  retail, manufacturing, FMCG  under one roof.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  SCREENSHOTS  -->
+<section id="screenshots">
+  <div class="container">
+    <div class="section-header center">
+      <div class="section-label">Product Walkthrough</div>
+      <h2 class="section-title">See WMSPro in action</h2>
+      <p class="section-sub">Live screenshots from the pilot build  full product gallery coming with GA launch.</p>
+    </div>
+    <div class="screens-grid">
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">Operations Dashboard</div>
+          <div class="ph-bar sky" style="width:100%"></div>
+          <div class="ph-bar slate" style="width:80%"></div>
+          <div class="ph-bar slate" style="width:60%"></div>
+          <div class="ph-mini-grid">
+            <div class="ph-mini" style="background:rgba(14,165,233,0.15)"></div>
+            <div class="ph-mini" style="background:rgba(20,184,166,0.15)"></div>
+            <div class="ph-mini"></div>
+            <div class="ph-mini"></div>
+          </div>
+        </div>
+        <div class="screen-label">Ops Dashboard <span class="coming-soon-badge">Live</span></div>
+      </div>
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">GRN Entry & Serial Tracking</div>
+          <div class="ph-bar teal" style="width:100%"></div>
+          <div class="ph-bar slate" style="width:70%"></div>
+          <div style="background:var(--slate-100);border-radius:6px;height:70px;margin-top:10px;display:flex;align-items:center;justify-content:center;">
+            <span style="font-size:0.7rem;color:var(--slate-500)"> Barcode Scan View</span>
+          </div>
+        </div>
+        <div class="screen-label">GRN Module <span class="coming-soon-badge">Live</span></div>
+      </div>
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">Client Billing Summary</div>
+          <div class="ph-bar sky" style="width:90%"></div>
+          <div class="ph-bar teal" style="width:65%"></div>
+          <div class="ph-mini-grid">
+            <div class="ph-mini" style="background:rgba(245,158,11,0.15)"></div>
+            <div class="ph-mini" style="background:rgba(14,165,233,0.1)"></div>
+          </div>
+        </div>
+        <div class="screen-label">Billing Module <span class="coming-soon-badge">Live</span></div>
+      </div>
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">Client Self-Service Portal</div>
+          <div class="ph-bar slate" style="width:100%"></div>
+          <div class="ph-bar slate" style="width:80%"></div>
+          <div class="ph-bar teal" style="width:50%"></div>
+        </div>
+        <div class="screen-label">Client Portal <span class="coming-soon-badge">Screenshot Coming</span></div>
+      </div>
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">Gate In / Gate Out Log</div>
+          <div class="ph-bar sky" style="width:85%"></div>
+          <div class="ph-bar slate" style="width:60%"></div>
+          <div class="ph-bar slate" style="width:75%"></div>
+        </div>
+        <div class="screen-label">Gate Management <span class="coming-soon-badge">Screenshot Coming</span></div>
+      </div>
+      <div class="screen-ph">
+        <div class="screen-ph-top">
+          <span style="background:#EF4444"></span>
+          <span style="background:#F59E0B"></span>
+          <span style="background:#10B981"></span>
+        </div>
+        <div class="screen-ph-body">
+          <div class="screen-ph-title">Labor & Workforce Tracker</div>
+          <div class="ph-bar teal" style="width:100%"></div>
+          <div class="ph-mini-grid">
+            <div class="ph-mini"></div>
+            <div class="ph-mini" style="background:rgba(20,184,166,0.15)"></div>
+            <div class="ph-mini"></div>
+            <div class="ph-mini"></div>
+          </div>
+        </div>
+        <div class="screen-label">Labor Management <span class="coming-soon-badge">Screenshot Coming</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  CTA  -->
+<section id="cta">
+  <div class="container" style="position:relative;z-index:1">
+    <div class="section-label" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2)">Get Started</div>
+    <h2 class="section-title">Ready to modernize your warehouse operations?</h2>
+    <p class="section-sub">Join our Founding Customer program  limited to 10 companies. Get fixed implementation, free first-year updates, and direct access to the product team.</p>
+    <div class="cta-buttons">
+      <a href="mailto:info@gwutech.com" class="btn-white"> Book a Demo</a>
+      <a href="mailto:info@gwutech.com" class="btn-ghost-white"> Start a Discussion</a>
+    </div>
+    <div class="cta-contacts">
+      <div class="cta-contact-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+        info@gwutech.com
+      </div>
+      <div class="cta-contact-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+        Chennai, Tamil Nadu, India
+      </div>
+      <div class="cta-contact-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        www.gwutech.com
+      </div>
+    </div>
+  </div>
+</section>
+
+<!--  FOOTER  -->
+<footer>
+  <div class="footer-brand">GWU Software & Solutions  <span>WMSPro</span></div>
+  <div class="footer-copy"> 2025 GWU Software & Solutions. Built with purpose, hosted on AWS India.</div>
+  <div class="footer-links">
+    <a href="#modules">Modules</a>
+    <a href="#why">Why GWU</a>
+    <a href="#cta">Contact</a>
+  </div>
+</footer>
+
+<script>
+  // Smooth scroll
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      document.querySelector(a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+
+  // Entrance animations on scroll
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.opacity = '1';
+        entry.target.style.transform = 'translateY(0)';
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.module-card, .why-card, .ind-card, .screen-ph, .ps-item').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(20px)';
+    el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+    observer.observe(el);
+  });
+</script>
+</body>
+</html>

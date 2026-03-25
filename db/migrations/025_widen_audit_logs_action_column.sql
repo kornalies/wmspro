@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE audit_logs
+  ALTER COLUMN action TYPE TEXT;
+
+COMMIT;

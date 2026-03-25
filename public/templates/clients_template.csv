@@ -1,0 +1,2 @@
+client_code,client_name,contact_person,contact_email,contact_phone,address,city,state,pincode,gst_number,pan_number,is_active
+CLI001,Acme Retail Pvt Ltd,Rahul Sharma,rahul@acme.com,9876543210,Plot 11 Industrial Area,Chennai,Tamil Nadu,600001,33ABCDE1234F1Z5,ABCDE1234F,true

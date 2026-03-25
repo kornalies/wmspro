@@ -1,0 +1,2 @@
+warehouse_code,client_code,item_code,serial_number,status,received_date
+WH001,CLI001,ITM001,SN-0001,IN_STOCK,2026-02-28

@@ -1,0 +1,56 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to deploy (tag/branch/commit)"
+        required: true
+        default: "main"
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy on production server
+        shell: bash
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          DEPLOY_REF: ${{ inputs.git_ref }}
+        run: |
+          ssh "${PROD_USER}@${PROD_HOST}" <<EOF
+          set -euo pipefail
+          cd "${PROD_APP_DIR}"
+          git fetch --all --tags
+          git checkout "${DEPLOY_REF}"
+          npm ci
+          set -a
+          source .env.production
+          set +a
+          npm run db:migrate
+          npx next build
+          sudo systemctl restart wmspro
+          curl -fsS http://127.0.0.1:3000/api/health
+          EOF
+

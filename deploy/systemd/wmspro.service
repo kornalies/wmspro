@@ -1,0 +1,20 @@
+[Unit]
+Description=WMS Pro Next.js App
+After=network.target
+
+[Service]
+Type=simple
+User=wms
+Group=wms
+WorkingDirectory=/opt/wmspro/current
+EnvironmentFile=/opt/wmspro/current/.env.production
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env npm run start -- --port 3000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
