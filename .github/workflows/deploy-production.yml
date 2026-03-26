@@ -74,10 +74,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          TAG_NAME="prod-$(date -u +%Y%m%d-%H%M%S)-${SHORT_SHA}"
+          TAG_NAME="prod-$(date -u +%Y%m%d-%H%M%S)-${SHORT_SHA}-r${GITHUB_RUN_NUMBER}"
           git tag -a "${TAG_NAME}" -m "Production deploy ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          git push origin "${TAG_NAME}"
+          git push origin "refs/tags/${TAG_NAME}"
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Publish rollback summary

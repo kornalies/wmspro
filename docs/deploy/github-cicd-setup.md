@@ -39,7 +39,7 @@ This repository includes:
 - Manual only via Actions `Deploy Production`
 - Provide `git_ref` (tag/commit) in workflow input
 - On successful deploy, workflow creates a release tag:
-  - Format: `prod-YYYYMMDD-HHMMSS-<shortsha>`
+  - Format: `prod-YYYYMMDD-HHMMSS-<shortsha>-r<run_number>`
   - This tag is used as rollback target reference
 
 ## Rollback Usage (Production)
