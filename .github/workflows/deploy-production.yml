@@ -13,6 +13,9 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -22,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
 
       - name: Setup SSH key
         shell: bash
@@ -62,3 +68,33 @@ jobs:
           systemctl status wmspro --no-pager || true
           exit 1
           EOF
+
+      - name: Create production release tag
+        id: tag_release
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          TAG_NAME="prod-$(date -u +%Y%m%d-%H%M%S)-${SHORT_SHA}"
+          git tag -a "${TAG_NAME}" -m "Production deploy ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git push origin "${TAG_NAME}"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rollback summary
+        shell: bash
+        env:
+          TAG_NAME: ${{ steps.tag_release.outputs.tag_name }}
+        run: |
+          {
+            echo "## Production Deployment Summary"
+            echo ""
+            echo "- Repository: \`${GITHUB_REPOSITORY}\`"
+            echo "- Deployed ref: \`${{ inputs.git_ref }}\`"
+            echo "- Deployed commit: \`$(git rev-parse HEAD)\`"
+            echo "- Release tag: \`${TAG_NAME}\`"
+            echo ""
+            echo "### Rollback SOP"
+            echo "1. Open **Actions -> Rollback Production**"
+            echo "2. Enter \`rollback_ref\` as previous release tag"
+            echo "3. Run workflow and verify \`/api/health\`"
+          } >> "$GITHUB_STEP_SUMMARY"
