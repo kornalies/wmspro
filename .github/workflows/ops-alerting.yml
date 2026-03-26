@@ -9,8 +9,6 @@ on:
       - Rollback Production
     types:
       - completed
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -63,7 +61,7 @@ jobs:
             core.info(`Created alert issue #${created.number}`);
 
   production-health-check:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH key
