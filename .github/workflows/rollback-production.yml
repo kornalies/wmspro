@@ -1,0 +1,64 @@
+name: Rollback Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_ref:
+        description: "Tag/branch/commit to rollback to"
+        required: true
+        type: string
+
+concurrency:
+  group: rollback-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+
+    steps:
+      - name: Setup SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rollback on production server
+        shell: bash
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          ROLLBACK_REF: ${{ inputs.rollback_ref }}
+        run: |
+          ssh "${PROD_USER}@${PROD_HOST}" <<EOF
+          set -euo pipefail
+          cd "${PROD_APP_DIR}"
+          git fetch --all --tags
+          git checkout "${ROLLBACK_REF}"
+          npm ci
+          set -a
+          source .env.production
+          set +a
+          npm run db:migrate
+          npx next build
+          sudo systemctl restart wmspro
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000/api/health >/dev/null; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check failed after rollback"
+          systemctl status wmspro --no-pager || true
+          exit 1
+          EOF
+

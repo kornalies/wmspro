@@ -1,0 +1,124 @@
+name: Ops Alerting
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Deploy Staging
+      - Deploy Production
+      - Rollback Production
+    types:
+      - completed
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  workflow-failure-alert:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open issue for failed workflow run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const title = `ALERT: ${run.name} failed on ${run.head_branch}`;
+            const issueBody = [
+              "A monitored workflow failed.",
+              "",
+              `- Workflow: ${run.name}`,
+              `- Conclusion: ${run.conclusion}`,
+              `- Branch: ${run.head_branch}`,
+              `- Commit: ${run.head_sha}`,
+              `- Run URL: ${run.html_url}`,
+              `- Triggered by: ${run.actor?.login || "unknown"}`
+            ].join("\n");
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "ops-alert"
+            });
+
+            const existing = issues.find((i) => i.title === title);
+            if (existing) {
+              core.info(`Alert issue already open: #${existing.number}`);
+              return;
+            }
+
+            const { data: created } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: issueBody,
+              labels: ["ops-alert", "ci-cd", "workflow-failure"]
+            });
+            core.info(`Created alert issue #${created.number}`);
+
+  production-health-check:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Probe production app health endpoint
+        id: health_probe
+        shell: bash
+        continue-on-error: true
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          ssh "${PROD_USER}@${PROD_HOST}" "curl -fsS http://127.0.0.1:3000/api/health >/dev/null"
+
+      - name: Open issue for production health anomaly
+        if: steps.health_probe.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "ALERT: Production health endpoint check failed";
+            const body = [
+              "Scheduled health probe could not verify the production API health endpoint.",
+              "",
+              `- Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `- Checked host: ${process.env.PROD_HOST || "masked"}`,
+              "- Endpoint: http://127.0.0.1:3000/api/health (from production host)",
+              "- Action: Investigate server status, app logs, and restart if needed."
+            ].join("\n");
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "ops-alert"
+            });
+
+            const existing = issues.find((i) => i.title === title);
+            if (existing) {
+              core.info(`Health alert already open: #${existing.number}`);
+              return;
+            }
+
+            const { data: created } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ["ops-alert", "ci-cd", "health-check"]
+            });
+            core.info(`Created health alert issue #${created.number}`);
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
