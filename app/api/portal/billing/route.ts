@@ -42,7 +42,7 @@ export async function GET(request: Request) {
         ih.status,
         ih.client_action_status,
         ih.client_action_at,
-        COALESCE(ih.currency_code, 'INR') AS currency_code,
+        COALESCE(ih.currency, 'INR') AS currency_code,
         COALESCE(ih.taxable_amount, 0)::numeric AS net_amount,
         COALESCE(ih.total_tax_amount, 0)::numeric AS tax_amount,
         COALESCE(ih.grand_total, 0)::numeric AS total_amount,
