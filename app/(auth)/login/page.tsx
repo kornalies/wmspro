@@ -1,7 +1,6 @@
 "use client"
 
-import { useRouter, useSearchParams } from "next/navigation"
-import { Suspense } from "react"
+import { useRouter } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -21,9 +20,8 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-function LoginPageContent() {
+export default function LoginPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const loginMutation = useLogin()
 
   const {
@@ -42,7 +40,10 @@ function LoginPageContent() {
   const onSubmit = async (values: FormValues) => {
     try {
       const loginResult = await loginMutation.mutateAsync(values)
-      const nextParam = String(searchParams.get("next") || "")
+      const nextParam =
+        typeof window !== "undefined"
+          ? String(new URLSearchParams(window.location.search).get("next") || "")
+          : ""
       const user = loginResult?.data
       const role = String(user?.role || "").toUpperCase()
       const isPortalOnlyRole =
@@ -113,13 +114,5 @@ function LoginPageContent() {
         </CardContent>
       </Card>
     </div>
-  )
-}
-
-export default function LoginPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600" />}>
-      <LoginPageContent />
-    </Suspense>
   )
 }
