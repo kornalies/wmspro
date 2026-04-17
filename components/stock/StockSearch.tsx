@@ -124,11 +124,11 @@ export function StockSearch() {
 
   const getStatusBadge = (status: string) => {
     const config: Record<string, string> = {
-      IN_STOCK: "bg-green-100 text-green-800",
-      RESERVED: "bg-yellow-100 text-yellow-800",
-      DISPATCHED: "bg-blue-100 text-blue-800",
+      IN_STOCK: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
+      RESERVED: "bg-yellow-100 text-yellow-800 dark:bg-amber-900/40 dark:text-amber-200",
+      DISPATCHED: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
     }
-    return <Badge className={config[status] || "bg-gray-100 text-gray-800"}>{status.replace("_", " ")}</Badge>
+    return <Badge className={config[status] || "bg-gray-100 text-gray-800 dark:bg-slate-800 dark:text-slate-200"}>{status.replace("_", " ")}</Badge>
   }
 
   return (
@@ -253,7 +253,7 @@ export function StockSearch() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Serial Number</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Client</TableHead>
@@ -272,7 +272,7 @@ export function StockSearch() {
                     <TableCell>
                       <div>
                         <div className="font-medium">{stock.item_name}</div>
-                        <div className="text-xs text-gray-500">{stock.item_code}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{stock.item_code}</div>
                       </div>
                     </TableCell>
                     <TableCell>{stock.client_name}</TableCell>
@@ -281,7 +281,7 @@ export function StockSearch() {
                     <TableCell>{getStatusBadge(stock.status)}</TableCell>
                     <TableCell>{stock.received_date}</TableCell>
                     <TableCell className="text-right">
-                      <span className={stock.age_days > 60 ? "font-semibold text-red-600" : ""}>
+                      <span className={stock.age_days > 60 ? "font-semibold text-red-600 dark:text-red-300" : ""}>
                         {stock.age_days}
                       </span>
                     </TableCell>
@@ -309,7 +309,7 @@ export function StockSearch() {
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-sm text-gray-500">
+                    <TableCell colSpan={9} className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                       No stock found for selected filters.
                     </TableCell>
                   </TableRow>
@@ -319,7 +319,7 @@ export function StockSearch() {
           )}
           {!isLoading && totalRows > 0 && (
             <div className="mt-4 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
                 Showing {(activePage - 1) * PAGE_SIZE + 1}-
                 {Math.min((activePage - 1) * PAGE_SIZE + rows.length, totalRows)} of {totalRows}
               </p>
@@ -335,7 +335,7 @@ export function StockSearch() {
                 <div className="flex items-center gap-1">
                   {pageItems.map((item, index) =>
                     item === "..." ? (
-                      <span key={`ellipsis-${index}`} className="px-1 text-sm text-gray-500">
+                      <span key={`ellipsis-${index}`} className="px-1 text-sm text-slate-500 dark:text-slate-400">
                         ...
                       </span>
                     ) : (
@@ -368,25 +368,25 @@ export function StockSearch() {
       <div className="grid grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600">In Stock</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">In Stock</p>
             <p className="text-2xl font-bold text-green-600">{summary.in_stock}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600">Reserved</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Reserved</p>
             <p className="text-2xl font-bold text-yellow-600">{summary.reserved}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600">Dispatched</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Dispatched</p>
             <p className="text-2xl font-bold text-blue-600">{summary.dispatched}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600">Avg Age</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Avg Age</p>
             <p className="text-2xl font-bold">{summary.avg_age_days} days</p>
           </CardContent>
         </Card>
@@ -399,23 +399,23 @@ export function StockSearch() {
           </DialogHeader>
           {selectedStock && (
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <p className="text-gray-500">Serial</p>
+              <p className="text-slate-500 dark:text-slate-400">Serial</p>
               <p className="font-mono">{selectedStock.serial_number}</p>
-              <p className="text-gray-500">Item</p>
+              <p className="text-slate-500 dark:text-slate-400">Item</p>
               <p>{selectedStock.item_name}</p>
-              <p className="text-gray-500">Item Code</p>
+              <p className="text-slate-500 dark:text-slate-400">Item Code</p>
               <p>{selectedStock.item_code}</p>
-              <p className="text-gray-500">Client</p>
+              <p className="text-slate-500 dark:text-slate-400">Client</p>
               <p>{selectedStock.client_name}</p>
-              <p className="text-gray-500">Warehouse</p>
+              <p className="text-slate-500 dark:text-slate-400">Warehouse</p>
               <p>{selectedStock.warehouse_name}</p>
-              <p className="text-gray-500">Location</p>
+              <p className="text-slate-500 dark:text-slate-400">Location</p>
               <p>{selectedStock.bin_location || selectedStock.zone_name}</p>
-              <p className="text-gray-500">Status</p>
+              <p className="text-slate-500 dark:text-slate-400">Status</p>
               <div>{getStatusBadge(selectedStock.status)}</div>
-              <p className="text-gray-500">Received</p>
+              <p className="text-slate-500 dark:text-slate-400">Received</p>
               <p>{selectedStock.received_date}</p>
-              <p className="text-gray-500">Age</p>
+              <p className="text-slate-500 dark:text-slate-400">Age</p>
               <p>{selectedStock.age_days} days</p>
             </div>
           )}

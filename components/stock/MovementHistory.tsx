@@ -130,10 +130,10 @@ export default function MovementHistory() {
         </div>
       </div>
 
-      <div className="rounded-md border">
+      <div className="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="bg-slate-50 dark:bg-slate-900">
               <TableHead>Date</TableHead>
               <TableHead>Time</TableHead>
               <TableHead>Serial</TableHead>
@@ -153,7 +153,7 @@ export default function MovementHistory() {
                 <TableCell className="font-mono text-xs">{row.serial_number}</TableCell>
                 <TableCell>
                   {row.item_name}
-                  <div className="text-xs text-gray-500">{row.item_code}</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">{row.item_code}</div>
                 </TableCell>
                 <TableCell>{row.warehouse_name}</TableCell>
                 <TableCell className="font-mono text-sm">{row.from_bin_location}</TableCell>
@@ -161,7 +161,7 @@ export default function MovementHistory() {
                 <TableCell>
                   {row.moved_by_name || row.moved_by_username || "-"}
                   {row.moved_by_username && row.moved_by_name !== row.moved_by_username ? (
-                    <div className="text-xs text-gray-500">{row.moved_by_username}</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">{row.moved_by_username}</div>
                   ) : null}
                 </TableCell>
                 <TableCell>{row.remarks || "-"}</TableCell>
@@ -169,7 +169,7 @@ export default function MovementHistory() {
             ))}
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-sm text-gray-500">
+                <TableCell colSpan={9} className="text-center text-sm text-slate-500 dark:text-slate-400">
                   No movement records found.
                 </TableCell>
               </TableRow>

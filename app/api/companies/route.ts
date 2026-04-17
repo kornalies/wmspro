@@ -14,6 +14,7 @@ const createCompanySchema = z.object({
   subscription_plan: z.enum(["BASIC", "PRO", "ENTERPRISE"]).optional(),
   storage_used_gb: z.number().min(0).optional(),
   billing_status: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED"]).optional(),
+  is_active: z.boolean().optional(),
   admin_username: z.string().trim().min(3).max(60),
   admin_email: z.string().email(),
   admin_full_name: z.string().trim().min(2).max(120),
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest) {
         company_code, company_name, domain, storage_bucket,
         subscription_plan, storage_used_gb, billing_status, is_active
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING
          id, company_code, company_name, domain, storage_bucket,
          subscription_plan, storage_used_gb, billing_status, is_active, created_at`,
@@ -118,6 +119,7 @@ export async function POST(request: NextRequest) {
         payload.subscription_plan || "BASIC",
         payload.storage_used_gb ?? 0,
         payload.billing_status || "TRIAL",
+        payload.is_active ?? true,
       ]
     )
 

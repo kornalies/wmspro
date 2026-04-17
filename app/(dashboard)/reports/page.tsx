@@ -198,7 +198,7 @@ export default function ReportsPage() {
   const pagedAnalytics = analytics.slice(rowStart, rowEnd)
 
   const ReportPagination = activeRowsCount > pageSize ? (
-    <div className="mb-3 flex items-center justify-between text-sm text-gray-600">
+    <div className="mb-3 flex items-center justify-between text-sm text-slate-600 dark:text-slate-300">
       <p>
         Showing {activeRowsCount ? rowStart + 1 : 0}-{Math.min(rowEnd, activeRowsCount)} of {activeRowsCount}
       </p>
@@ -225,8 +225,8 @@ export default function ReportsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Reports & Analytics</h1>
-          <p className="mt-1 text-gray-500">Warehouse performance reports</p>
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">Reports & Analytics</h1>
+          <p className="mt-1 text-slate-600 dark:text-slate-300">Warehouse performance reports</p>
         </div>
         <Button variant="outline">
           <Download className="mr-2 h-4 w-4" />
@@ -239,7 +239,7 @@ export default function ReportsPage() {
           <Card
             key={report.id}
             className={`cursor-pointer transition-all hover:shadow-md ${
-              reportType === report.id ? "border-2 border-blue-500 bg-blue-50" : "hover:border-gray-300"
+              reportType === report.id ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "hover:border-slate-300 dark:hover:border-slate-700"
             }`}
             onClick={() => {
               setReportType(report.id)
@@ -247,11 +247,11 @@ export default function ReportsPage() {
             }}
           >
             <CardContent className="pt-6">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-950/40">
                 <report.icon className="h-5 w-5 text-blue-600" />
               </div>
               <p className="text-sm font-semibold">{report.title}</p>
-              <p className="mt-1 text-xs text-gray-500">{report.desc}</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{report.desc}</p>
             </CardContent>
           </Card>
         ))}
@@ -261,15 +261,15 @@ export default function ReportsPage() {
         <CardContent className="pt-6">
           <div className="flex items-end gap-4">
             <div className="flex-1">
-              <label className="mb-1 block text-sm text-gray-600">From Date</label>
+              <label className="mb-1 block text-sm text-slate-600 dark:text-slate-300">From Date</label>
               <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </div>
             <div className="flex-1">
-              <label className="mb-1 block text-sm text-gray-600">To Date</label>
+              <label className="mb-1 block text-sm text-slate-600 dark:text-slate-300">To Date</label>
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
             <div className="flex-1">
-              <label className="mb-1 block text-sm text-gray-600">Client</label>
+              <label className="mb-1 block text-sm text-slate-600 dark:text-slate-300">Client</label>
               <Select value={clientId} onValueChange={setClientId}>
                 <SelectTrigger>
                   <SelectValue />
@@ -315,7 +315,7 @@ export default function ReportsPage() {
             {ReportPagination}
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Client</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead className="text-right">In Stock</TableHead>
@@ -355,7 +355,7 @@ export default function ReportsPage() {
             {ReportPagination}
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Date</TableHead>
                   <TableHead className="text-right">GRNs</TableHead>
                   <TableHead className="text-right">DOs</TableHead>
@@ -401,7 +401,7 @@ export default function ReportsPage() {
             {ReportPagination}
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Gate In No</TableHead>
                   <TableHead>Vehicle</TableHead>
                   <TableHead>Transporter</TableHead>
@@ -447,7 +447,7 @@ export default function ReportsPage() {
             {ReportPagination}
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Serial Number</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Client</TableHead>
@@ -466,7 +466,7 @@ export default function ReportsPage() {
                       <span className="font-bold text-red-600">{row.age_days}</span>
                     </TableCell>
                     <TableCell>
-                      <Badge className="bg-green-100 text-green-800">{row.status}</Badge>
+                      <Badge className="bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200">{row.status}</Badge>
                     </TableCell>
                     <TableCell className="text-right">{`Rs ${Number(row.value).toLocaleString()}`}</TableCell>
                   </TableRow>
@@ -492,23 +492,23 @@ export default function ReportsPage() {
                 <div key={client.name} className="rounded-lg border p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <h3 className="font-semibold">{client.name}</h3>
-                    <Badge className="bg-blue-100 text-blue-800">Active</Badge>
+                    <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">Active</Badge>
                   </div>
                   <div className="grid grid-cols-4 gap-4 text-center">
-                    <div className="rounded bg-blue-50 p-3">
-                      <p className="text-xs text-gray-500">Stock Units</p>
+                    <div className="rounded bg-blue-50 p-3 dark:bg-blue-950/30">
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Stock Units</p>
                       <p className="text-xl font-bold text-blue-600">{client.stock}</p>
                     </div>
                     <div className="rounded bg-green-50 p-3">
-                      <p className="text-xs text-gray-500">Billing</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Billing</p>
                       <p className="text-xl font-bold text-green-600">{`Rs ${(Number(client.billing) / 1000).toFixed(1)}K`}</p>
                     </div>
                     <div className="rounded bg-purple-50 p-3">
-                      <p className="text-xs text-gray-500">GRNs</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">GRNs</p>
                       <p className="text-xl font-bold text-purple-600">{client.grns}</p>
                     </div>
                     <div className="rounded bg-orange-50 p-3">
-                      <p className="text-xs text-gray-500">DOs</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">DOs</p>
                       <p className="text-xl font-bold text-orange-600">{client.dos}</p>
                     </div>
                   </div>

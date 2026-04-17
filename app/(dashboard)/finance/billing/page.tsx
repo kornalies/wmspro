@@ -74,6 +74,40 @@ type WarehouseOption = {
   warehouse_name: string
 }
 
+type BillingProfile = {
+  id: number
+  client_id: number
+  client_name: string
+  client_code: string
+  billing_cycle: "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY"
+  billing_day_of_week?: number | null
+  billing_day_of_month?: number | null
+  storage_billing_method: "SNAPSHOT" | "DURATION"
+  storage_grace_days?: number
+  credit_days?: number
+  currency?: string
+  invoice_prefix?: string
+  minimum_billing_enabled?: boolean
+  minimum_billing_amount?: number
+  auto_finalize?: boolean
+  is_active?: boolean
+}
+
+type BillingProfileForm = {
+  billing_cycle: "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY"
+  billing_day_of_week: string
+  billing_day_of_month: string
+  storage_billing_method: "SNAPSHOT" | "DURATION"
+  storage_grace_days: string
+  credit_days: string
+  currency: string
+  invoice_prefix: string
+  minimum_billing_enabled: boolean
+  minimum_billing_amount: string
+  auto_finalize: boolean
+  is_active: boolean
+}
+
 type UnratedTransaction = {
   id: number
   client_id?: number
@@ -157,6 +191,41 @@ const toLabel = (value: string) =>
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase())
 
+function blankBillingProfileForm(): BillingProfileForm {
+  return {
+    billing_cycle: "MONTHLY",
+    billing_day_of_week: "1",
+    billing_day_of_month: "1",
+    storage_billing_method: "SNAPSHOT",
+    storage_grace_days: "0",
+    credit_days: "30",
+    currency: "INR",
+    invoice_prefix: "INV",
+    minimum_billing_enabled: false,
+    minimum_billing_amount: "0",
+    auto_finalize: false,
+    is_active: true,
+  }
+}
+
+function mapBillingProfileToForm(profile: BillingProfile | null): BillingProfileForm {
+  if (!profile) return blankBillingProfileForm()
+  return {
+    billing_cycle: profile.billing_cycle || "MONTHLY",
+    billing_day_of_week: String(profile.billing_day_of_week ?? 1),
+    billing_day_of_month: String(profile.billing_day_of_month ?? 1),
+    storage_billing_method: profile.storage_billing_method || "SNAPSHOT",
+    storage_grace_days: String(profile.storage_grace_days ?? 0),
+    credit_days: String(profile.credit_days ?? 30),
+    currency: profile.currency || "INR",
+    invoice_prefix: profile.invoice_prefix || "INV",
+    minimum_billing_enabled: Boolean(profile.minimum_billing_enabled),
+    minimum_billing_amount: String(profile.minimum_billing_amount ?? 0),
+    auto_finalize: Boolean(profile.auto_finalize),
+    is_active: profile.is_active !== false,
+  }
+}
+
 export default function BillingPage() {
   const [dateFrom, setDateFrom] = useState(THIRTY_DAYS_AGO_ISO)
   const [dateTo, setDateTo] = useState(TODAY_ISO)
@@ -178,11 +247,20 @@ export default function BillingPage() {
     rootCause: "",
     note: "",
   })
+  const [profileClientId, setProfileClientId] = useState("")
+  const [profileDraft, setProfileDraft] = useState<BillingProfileForm | null>(null)
 
   const clientsQuery = useQuery({
     queryKey: ["clients", "active"],
     queryFn: async () => {
       const res = await apiClient.get<{ id: number; client_name: string }[]>("/clients?is_active=true")
+      return res.data ?? []
+    },
+  })
+  const billingProfilesQuery = useQuery({
+    queryKey: ["finance", "billing-profile"],
+    queryFn: async () => {
+      const res = await apiClient.get<BillingProfile[]>("/finance/billing-profile")
       return res.data ?? []
     },
   })
@@ -260,6 +338,51 @@ export default function BillingPage() {
     },
     onError: (error) => handleError(error, "Failed to run auto reprocess job"),
   })
+  const saveBillingProfileMutation = useMutation({
+    mutationFn: async () => {
+      const dayOfWeek = Number(resolvedProfileForm.billing_day_of_week || "1")
+      const dayOfMonth = Number(resolvedProfileForm.billing_day_of_month || "1")
+      const storageGraceDays = Number(resolvedProfileForm.storage_grace_days || "0")
+      const creditDays = Number(resolvedProfileForm.credit_days || "30")
+      const minimumAmount = Number(resolvedProfileForm.minimum_billing_amount || "0")
+
+      return apiClient.put("/finance/billing-profile", {
+        client_id: Number(effectiveProfileClientId),
+        billing_cycle: resolvedProfileForm.billing_cycle,
+        billing_day_of_week:
+          resolvedProfileForm.billing_cycle === "WEEKLY"
+            ? Math.max(1, Math.min(7, Number.isFinite(dayOfWeek) ? dayOfWeek : 1))
+            : null,
+        billing_day_of_month:
+          resolvedProfileForm.billing_cycle !== "WEEKLY"
+            ? Math.max(1, Math.min(28, Number.isFinite(dayOfMonth) ? dayOfMonth : 1))
+            : 1,
+        storage_billing_method: resolvedProfileForm.storage_billing_method,
+        storage_grace_days: Math.max(0, Number.isFinite(storageGraceDays) ? storageGraceDays : 0),
+        credit_days: Math.max(0, Number.isFinite(creditDays) ? creditDays : 30),
+        currency: (resolvedProfileForm.currency || "INR").trim().toUpperCase(),
+        invoice_prefix: (resolvedProfileForm.invoice_prefix || "INV").trim().toUpperCase(),
+        minimum_billing_enabled: resolvedProfileForm.minimum_billing_enabled,
+        minimum_billing_amount: resolvedProfileForm.minimum_billing_enabled
+          ? Math.max(0, Number.isFinite(minimumAmount) ? minimumAmount : 0)
+          : 0,
+        auto_finalize: resolvedProfileForm.auto_finalize,
+        is_active: resolvedProfileForm.is_active,
+      })
+    },
+    onSuccess: () => {
+      toast.success("Billing profile saved")
+      setProfileDraft(null)
+      billingProfilesQuery.refetch()
+    },
+    onError: (error) => handleError(error, "Failed to save billing profile"),
+  })
+
+  const clients = clientsQuery.data ?? []
+  const effectiveProfileClientId = profileClientId || (clients.length ? String(clients[0].id) : "")
+  const selectedBillingProfile =
+    (billingProfilesQuery.data ?? []).find((row) => String(row.client_id) === effectiveProfileClientId) ?? null
+  const resolvedProfileForm = profileDraft ?? mapBillingProfileToForm(selectedBillingProfile)
 
   const unratedQuery = useQuery({
     queryKey: ["finance", "billing-transactions", "unrated", applied],
@@ -445,9 +568,9 @@ export default function BillingPage() {
   const activityMax = Math.max(...activityRows.map((row) => row.value), 1)
 
   const statusColors: Record<BillingInvoice["status"], string> = {
-    PAID: "bg-green-100 text-green-800",
-    PENDING: "bg-yellow-100 text-yellow-800",
-    OVERDUE: "bg-red-100 text-red-800",
+    PAID: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
+    PENDING: "bg-yellow-100 text-yellow-800 dark:bg-amber-900/40 dark:text-amber-200",
+    OVERDUE: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
   }
 
   const overdueCount = invoices.filter((bill) => bill.status === "OVERDUE").length
@@ -646,11 +769,242 @@ export default function BillingPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Billing & Finance</h1>
-          <p className="mt-1 text-gray-500">Analytics Layer</p>
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">Billing & Finance</h1>
+          <p className="mt-1 text-slate-500 dark:text-slate-400">Analytics Layer</p>
         </div>
-        <Badge className="bg-slate-100 text-slate-800">Run preview before generation</Badge>
+        <Badge className="bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200">Run preview before generation</Badge>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Billing Profile Setup</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[260px]">
+              <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Client</p>
+              <Select
+                value={effectiveProfileClientId || undefined}
+                onValueChange={(value) => {
+                  setProfileClientId(value)
+                  setProfileDraft(null)
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select client" />
+                </SelectTrigger>
+                <SelectContent>
+                  {clients.map((client) => (
+                    <SelectItem key={client.id} value={String(client.id)}>
+                      {client.client_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Badge className={selectedBillingProfile ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"}>
+              {selectedBillingProfile ? "Existing Profile" : "New Profile"}
+            </Badge>
+          </div>
+
+          {effectiveProfileClientId ? (
+            <>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Billing Cycle</p>
+                  <Select
+                    value={resolvedProfileForm.billing_cycle}
+                    onValueChange={(value) =>
+                      setProfileDraft({
+                        ...resolvedProfileForm,
+                        billing_cycle: value as BillingProfileForm["billing_cycle"],
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="WEEKLY">WEEKLY</SelectItem>
+                      <SelectItem value="MONTHLY">MONTHLY</SelectItem>
+                      <SelectItem value="QUARTERLY">QUARTERLY</SelectItem>
+                      <SelectItem value="YEARLY">YEARLY</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {resolvedProfileForm.billing_cycle === "WEEKLY" ? (
+                  <div>
+                    <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Billing Day of Week (1-7)</p>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="7"
+                      value={resolvedProfileForm.billing_day_of_week}
+                      onChange={(e) => setProfileDraft({ ...resolvedProfileForm, billing_day_of_week: e.target.value })}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Billing Day of Month (1-28)</p>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="28"
+                      value={resolvedProfileForm.billing_day_of_month}
+                      onChange={(e) => setProfileDraft({ ...resolvedProfileForm, billing_day_of_month: e.target.value })}
+                    />
+                  </div>
+                )}
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Storage Billing Method</p>
+                  <Select
+                    value={resolvedProfileForm.storage_billing_method}
+                    onValueChange={(value) =>
+                      setProfileDraft({
+                        ...resolvedProfileForm,
+                        storage_billing_method: value as BillingProfileForm["storage_billing_method"],
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="SNAPSHOT">SNAPSHOT</SelectItem>
+                      <SelectItem value="DURATION">DURATION</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Storage Grace Days</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={resolvedProfileForm.storage_grace_days}
+                    onChange={(e) => setProfileDraft({ ...resolvedProfileForm, storage_grace_days: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Credit Days</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={resolvedProfileForm.credit_days}
+                    onChange={(e) => setProfileDraft({ ...resolvedProfileForm, credit_days: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Currency</p>
+                  <Input
+                    value={resolvedProfileForm.currency}
+                    onChange={(e) => setProfileDraft({ ...resolvedProfileForm, currency: e.target.value.toUpperCase() })}
+                  />
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Invoice Prefix</p>
+                  <Input
+                    value={resolvedProfileForm.invoice_prefix}
+                    onChange={(e) => setProfileDraft({ ...resolvedProfileForm, invoice_prefix: e.target.value.toUpperCase() })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Minimum Billing</p>
+                  <Select
+                    value={resolvedProfileForm.minimum_billing_enabled ? "YES" : "NO"}
+                    onValueChange={(value) =>
+                      setProfileDraft({
+                        ...resolvedProfileForm,
+                        minimum_billing_enabled: value === "YES",
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NO">Disabled</SelectItem>
+                      <SelectItem value="YES">Enabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Minimum Billing Amount</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    disabled={!resolvedProfileForm.minimum_billing_enabled}
+                    value={resolvedProfileForm.minimum_billing_amount}
+                    onChange={(e) => setProfileDraft({ ...resolvedProfileForm, minimum_billing_amount: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Auto Finalize</p>
+                  <Select
+                    value={resolvedProfileForm.auto_finalize ? "YES" : "NO"}
+                    onValueChange={(value) =>
+                      setProfileDraft({
+                        ...resolvedProfileForm,
+                        auto_finalize: value === "YES",
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NO">No</SelectItem>
+                      <SelectItem value="YES">Yes</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">Profile Status</p>
+                  <Select
+                    value={resolvedProfileForm.is_active ? "ACTIVE" : "INACTIVE"}
+                    onValueChange={(value) =>
+                      setProfileDraft({
+                        ...resolvedProfileForm,
+                        is_active: value === "ACTIVE",
+                      })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">ACTIVE</SelectItem>
+                      <SelectItem value="INACTIVE">INACTIVE</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setProfileDraft(null)
+                  }}
+                >
+                  Reset
+                </Button>
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700"
+                  disabled={saveBillingProfileMutation.isPending || billingProfilesQuery.isLoading}
+                  onClick={() => {
+                    if (!effectiveProfileClientId) {
+                      toast.error("Select a client")
+                      return
+                    }
+                    saveBillingProfileMutation.mutate()
+                  }}
+                >
+                  {saveBillingProfileMutation.isPending ? "Saving..." : "Save Billing Profile"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-slate-500 dark:text-slate-400">Create at least one active client to set billing profile.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="pt-6">
@@ -735,23 +1089,23 @@ export default function BillingPage() {
         </CardHeader>
         <CardContent>
           {!preview ? (
-            <p className="text-sm text-gray-500">Run preview to inspect scope, expected totals, and warnings before draft generation.</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Run preview to inspect scope, expected totals, and warnings before draft generation.</p>
           ) : (
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Billing Period</p><p className="font-semibold">{preview.periodFrom} to {preview.periodTo}</p></div>
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Client Scope</p><p className="font-semibold">{preview.clientScope}</p></div>
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Warehouse Scope</p><p className="font-semibold">{preview.warehouseScope}</p></div>
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Billable Tx</p><p className="font-semibold">{preview.billableTransactions}</p></div>
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Expected Invoices</p><p className="font-semibold">{preview.expectedInvoiceCount}</p></div>
-                <div className="rounded border p-2 text-xs"><p className="text-gray-500">Expected Revenue</p><p className="font-semibold">{asInr(preview.expectedRevenue)}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Billing Period</p><p className="font-semibold">{preview.periodFrom} to {preview.periodTo}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Client Scope</p><p className="font-semibold">{preview.clientScope}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Warehouse Scope</p><p className="font-semibold">{preview.warehouseScope}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Billable Tx</p><p className="font-semibold">{preview.billableTransactions}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Expected Invoices</p><p className="font-semibold">{preview.expectedInvoiceCount}</p></div>
+                <div className="rounded border p-2 text-xs"><p className="text-slate-500 dark:text-slate-400">Expected Revenue</p><p className="font-semibold">{asInr(preview.expectedRevenue)}</p></div>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="rounded border p-3">
                   <p className="mb-2 text-sm font-semibold">Grouped Expected Totals by Client</p>
                   <Table>
                     <TableHeader>
-                      <TableRow className="bg-gray-50">
+                      <TableRow className="bg-slate-50 dark:bg-slate-900">
                         <TableHead>Client</TableHead>
                         <TableHead className="text-right">Transactions</TableHead>
                         <TableHead className="text-right">Expected Revenue</TableHead>
@@ -792,12 +1146,12 @@ export default function BillingPage() {
       </Card>
 
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Total Revenue</p><p className="text-2xl font-semibold">{asInr(summary.totalRevenue)}</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Collected</p><p className="text-2xl font-semibold">{asInr(summary.totalPaid)}</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Collection Rate</p><p className="text-2xl font-semibold">{insights.collectionEfficiencyPct.toFixed(1)}%</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Avg Invoice</p><p className="text-2xl font-semibold">{asInr(insights.avgInvoiceValue)}</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Days to Due</p><p className="text-2xl font-semibold">{avgDaysToDue}</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-gray-500">Overdue Risk</p><p className="text-2xl font-semibold">{insights.overdueSharePct.toFixed(1)}%</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Total Revenue</p><p className="text-2xl font-semibold">{asInr(summary.totalRevenue)}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Collected</p><p className="text-2xl font-semibold">{asInr(summary.totalPaid)}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Collection Rate</p><p className="text-2xl font-semibold">{insights.collectionEfficiencyPct.toFixed(1)}%</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Avg Invoice</p><p className="text-2xl font-semibold">{asInr(insights.avgInvoiceValue)}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Days to Due</p><p className="text-2xl font-semibold">{avgDaysToDue}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Overdue Risk</p><p className="text-2xl font-semibold">{insights.overdueSharePct.toFixed(1)}%</p></CardContent></Card>
       </div>
 
       <Card>
@@ -824,7 +1178,7 @@ export default function BillingPage() {
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-gray-50">
+                  <TableRow className="bg-slate-50 dark:bg-slate-900">
                     <TableHead>Transaction Date</TableHead>
                     <TableHead>Source Type</TableHead>
                     <TableHead>Source Number</TableHead>
@@ -844,7 +1198,7 @@ export default function BillingPage() {
                       <TableCell>{tx.client_name}</TableCell>
                       <TableCell>{tx.warehouse_name || "-"}</TableCell>
                       <TableCell className="text-right">{Number(tx.quantity || 0).toFixed(3)} {tx.uom || ""}</TableCell>
-                      <TableCell className="text-xs text-gray-600">{tx.remarks || "Pending billing run"}</TableCell>
+                      <TableCell className="text-xs text-slate-600 dark:text-slate-300">{tx.remarks || "Pending billing run"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" size="sm" onClick={() => window.alert(`Source: ${tx.source_type} ${tx.source_ref_no || tx.source_doc_id || "-"}`)}>
@@ -862,7 +1216,7 @@ export default function BillingPage() {
                   ))}
                   {unbilledRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-6 text-center text-sm text-gray-500">
+                      <TableCell colSpan={8} className="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
                         No unbilled activities for selected filter.
                       </TableCell>
                     </TableRow>
@@ -880,7 +1234,7 @@ export default function BillingPage() {
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-gray-50">
+                  <TableRow className="bg-slate-50 dark:bg-slate-900">
                     <TableHead>Source</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>Charge Basis</TableHead>
@@ -895,7 +1249,7 @@ export default function BillingPage() {
                       <TableCell className="text-xs">{tx.source_type} {tx.source_ref_no ? `(${tx.source_ref_no})` : ""}</TableCell>
                       <TableCell>{tx.client_name}</TableCell>
                       <TableCell>{toLabel(tx.charge_type)} | Qty {Number(tx.quantity || 0).toFixed(3)}</TableCell>
-                      <TableCell className="text-xs text-gray-600">{tx.remarks || "No applicable rate rule found"}</TableCell>
+                      <TableCell className="text-xs text-slate-600 dark:text-slate-300">{tx.remarks || "No applicable rate rule found"}</TableCell>
                       <TableCell className="text-xs">Create/Map active rate card detail</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -909,7 +1263,7 @@ export default function BillingPage() {
                   ))}
                   {unratedRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-6 text-center text-sm text-gray-500">
+                      <TableCell colSpan={6} className="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
                         No unrated transactions for selected filter.
                       </TableCell>
                     </TableRow>
@@ -922,7 +1276,7 @@ export default function BillingPage() {
           {workspaceTab === "exceptions" ? (
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Exception Type</TableHead>
                   <TableHead>Severity</TableHead>
                   <TableHead>Source Ref</TableHead>
@@ -938,7 +1292,7 @@ export default function BillingPage() {
                   <TableRow key={ex.id}>
                     <TableCell>{ex.exceptionType}</TableCell>
                     <TableCell>
-                      <Badge className={ex.severity === "HIGH" ? "bg-red-100 text-red-700" : ex.severity === "MEDIUM" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}>
+                      <Badge className={ex.severity === "HIGH" ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200" : ex.severity === "MEDIUM" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200" : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"}>
                         {ex.severity}
                       </Badge>
                     </TableCell>
@@ -949,12 +1303,12 @@ export default function BillingPage() {
                       <Badge
                         className={
                           ex.status === "RESOLVED"
-                            ? "bg-green-100 text-green-700"
+                            ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-200"
                             : ex.status === "IGNORED"
-                              ? "bg-slate-100 text-slate-700"
+                              ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
                               : ex.status === "REVIEW"
-                                ? "bg-indigo-100 text-indigo-700"
-                                : "bg-amber-100 text-amber-700"
+                                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
                         }
                       >
                         {ex.status}
@@ -968,7 +1322,7 @@ export default function BillingPage() {
                         <Button variant="outline" size="sm" onClick={() => openExceptionDialog(ex, "REVIEW")}>Send to Finance Review</Button>
                       </div>
                       {(ex.rootCause || ex.resolutionNote) && (
-                        <p className="mt-1 max-w-[340px] text-right text-[11px] text-gray-500">
+                        <p className="mt-1 max-w-[340px] text-right text-[11px] text-slate-500 dark:text-slate-400">
                           {ex.rootCause ? `Cause: ${ex.rootCause}. ` : ""}
                           {ex.resolutionNote ? `Note: ${ex.resolutionNote}` : ""}
                         </p>
@@ -978,7 +1332,7 @@ export default function BillingPage() {
                 ))}
                 {exceptionDisplayRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-6 text-center text-sm text-gray-500">
+                    <TableCell colSpan={8} className="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
                       No exceptions detected in selected period.
                     </TableCell>
                   </TableRow>
@@ -994,7 +1348,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Revenue by Source</CardTitle></CardHeader>
           <CardContent className="h-64">
             {sourceMixData.length === 0 ? (
-              <p className="text-sm text-gray-500">No source mix available for this filter.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No source mix available for this filter.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={sourceMixData}>
@@ -1014,7 +1368,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Charge Mix</CardTitle></CardHeader>
           <CardContent className="h-64">
             {chargeMixData.length === 0 ? (
-              <p className="text-sm text-gray-500">No charge mix available for this filter.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No charge mix available for this filter.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -1035,7 +1389,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Revenue Waterfall</CardTitle></CardHeader>
           <CardContent className="h-64">
             {waterfallData.length === 0 ? (
-              <p className="text-sm text-gray-500">No revenue data available.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No revenue data available.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={waterfallData}>
@@ -1094,7 +1448,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Revenue Concentration by Client</CardTitle></CardHeader>
           <CardContent className="h-56">
             {concentrationData.length === 0 ? (
-              <p className="text-sm text-gray-500">No client concentration data available.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No client concentration data available.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
@@ -1120,10 +1474,10 @@ export default function BillingPage() {
               return (
                 <div key={row.label}>
                   <div className="mb-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-600">{row.label}</span>
+                    <span className="text-slate-600 dark:text-slate-300">{row.label}</span>
                     <span className="font-medium">{row.value}{row.unit}</span>
                   </div>
-                  <div className="h-2 rounded bg-gray-100">
+                  <div className="h-2 rounded bg-slate-100 dark:bg-slate-800">
                     <div className="h-2 rounded" style={{ width: `${width}%`, background: colors[index % colors.length] }} />
                   </div>
                 </div>
@@ -1131,10 +1485,10 @@ export default function BillingPage() {
             })}
             <div>
               <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="text-gray-600">DO/GRN Ratio</span>
+                <span className="text-slate-600 dark:text-slate-300">DO/GRN Ratio</span>
                 <span className="font-medium">{doToGrnRatio.toFixed(1)}x</span>
               </div>
-              <div className="h-2 rounded bg-gray-100">
+              <div className="h-2 rounded bg-slate-100 dark:bg-slate-800">
                 <div className="h-2 rounded bg-orange-500" style={{ width: `${Math.min(100, Math.round(doToGrnRatio * 20))}%` }} />
               </div>
             </div>
@@ -1154,7 +1508,7 @@ export default function BillingPage() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 dark:bg-slate-900">
                   <TableHead>Invoice No.</TableHead>
                   <TableHead>Client</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
@@ -1185,7 +1539,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Revenue Recognition Trend</CardTitle></CardHeader>
           <CardContent className="h-56">
             {trendData.length === 0 ? (
-              <p className="text-sm text-gray-500">No trend data available for this filter.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No trend data available for this filter.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trendData}>
@@ -1205,7 +1559,7 @@ export default function BillingPage() {
           <CardHeader><CardTitle>Pending Revenue by Client</CardTitle></CardHeader>
           <CardContent className="h-56">
             {pendingByClientData.length === 0 ? (
-              <p className="text-sm text-gray-500">No pending revenue in this filter.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No pending revenue in this filter.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={pendingByClientData} layout="vertical" margin={{ left: 16 }}>
@@ -1281,4 +1635,6 @@ export default function BillingPage() {
     </div>
   )
 }
+
+
 

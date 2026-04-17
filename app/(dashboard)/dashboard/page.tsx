@@ -99,8 +99,9 @@ export default function DashboardPage() {
       icon: Warehouse,
       description: "Across active network",
       href: "/admin/warehouses",
-      bgColor: "bg-gradient-to-br from-blue-400 to-blue-500",
-      iconColor: "text-blue-100",
+      accentBar: "bg-gradient-to-r from-blue-500 to-sky-500",
+      iconTone: "text-blue-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
     {
       title: "Inventory Value",
@@ -108,8 +109,9 @@ export default function DashboardPage() {
       icon: TrendingUp,
       description: "Total in-stock value",
       href: "/stock/search",
-      bgColor: "bg-gradient-to-br from-green-400 to-green-500",
-      iconColor: "text-green-100",
+      accentBar: "bg-gradient-to-r from-green-500 to-emerald-500",
+      iconTone: "text-emerald-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
     {
       title: "Today's GRNs",
@@ -117,8 +119,9 @@ export default function DashboardPage() {
       icon: PackagePlus,
       description: `Inbound received (${periodLabel.toLowerCase()})`,
       href: "/grn",
-      bgColor: "bg-gradient-to-br from-orange-400 to-orange-500",
-      iconColor: "text-orange-100",
+      accentBar: "bg-gradient-to-r from-orange-500 to-amber-500",
+      iconTone: "text-orange-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
     {
       title: "Today's DOs",
@@ -126,8 +129,9 @@ export default function DashboardPage() {
       icon: PackageX,
       description: `Outbound orders (${periodLabel.toLowerCase()})`,
       href: "/do",
-      bgColor: "bg-gradient-to-br from-purple-400 to-purple-500",
-      iconColor: "text-purple-100",
+      accentBar: "bg-gradient-to-r from-violet-500 to-purple-500",
+      iconTone: "text-violet-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
     {
       title: "Stock Alerts",
@@ -135,8 +139,9 @@ export default function DashboardPage() {
       icon: AlertCircle,
       description: "Below min stock threshold",
       href: "/stock/search",
-      bgColor: "bg-gradient-to-br from-red-500 to-red-600",
-      iconColor: "text-red-100",
+      accentBar: "bg-gradient-to-r from-red-500 to-rose-500",
+      iconTone: "text-red-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
     {
       title: "Capacity Utilization",
@@ -144,8 +149,9 @@ export default function DashboardPage() {
       icon: Building2,
       description: "Used capacity across warehouses",
       href: "/admin/zone-layouts",
-      bgColor: "bg-gradient-to-br from-cyan-400 to-cyan-500",
-      iconColor: "text-cyan-100",
+      accentBar: "bg-gradient-to-r from-teal-500 to-cyan-500",
+      iconTone: "text-teal-600",
+      valueTone: "text-slate-900 dark:text-slate-100",
     },
   ]
 
@@ -163,10 +169,10 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-3xl font-bold text-gray-900">Dashboard</h2>
-        <p className="mt-1 text-gray-500">Welcome to your warehouse management system</p>
-        <p className="mt-1 text-xs text-gray-500">Last updated: {lastUpdatedLabel}</p>
-        <div className="mt-4 inline-flex rounded-lg border bg-white p-1">
+        <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-100">Dashboard</h2>
+        <p className="mt-1 text-slate-600 dark:text-slate-300">Welcome to your warehouse management system</p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Last updated: {lastUpdatedLabel}</p>
+        <div className="mt-4 inline-flex rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-900">
           {[
             { id: "today", label: "Today" },
             { id: "week", label: "Week" },
@@ -178,7 +184,11 @@ export default function DashboardPage() {
               type="button"
               size="sm"
               variant={range === item.id ? "default" : "ghost"}
-              className="h-8 px-4"
+              className={
+                range === item.id
+                  ? "h-8 px-4"
+                  : "h-8 px-4 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+              }
               onClick={() => {
                 setRange(item.id as "today" | "week" | "month" | "custom")
                 setRangeError("")
@@ -191,7 +201,7 @@ export default function DashboardPage() {
         {range === "custom" && (
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <div>
-              <p className="mb-1 text-xs text-gray-500">From</p>
+              <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">From</p>
               <Input
                 type="date"
                 value={customFromInput}
@@ -200,7 +210,7 @@ export default function DashboardPage() {
               />
             </div>
             <div>
-              <p className="mb-1 text-xs text-gray-500">To</p>
+              <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">To</p>
               <Input
                 type="date"
                 value={customToInput}
@@ -267,25 +277,25 @@ export default function DashboardPage() {
         {stats.map((stat) => (
           <Card
             key={stat.title}
-            className="overflow-hidden border-none shadow-lg transition-shadow hover:shadow-xl"
+            className="overflow-hidden border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg dark:border-slate-800 dark:bg-slate-950"
           >
-            <div className={`${stat.bgColor} p-6`}>
-              <div className="mb-4 flex items-center justify-between">
-                <CardTitle className="flex items-center gap-1 text-sm font-medium text-white">
-                  {stat.title}
-                  <span
-                    title={stat.description}
-                    className="inline-flex cursor-help items-center rounded p-0.5 hover:bg-white/20"
-                  >
-                    <Info className="h-3.5 w-3.5" />
+            <div className={`h-[3px] w-full ${stat.accentBar}`} />
+            <div className="p-6">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <CardTitle className="flex items-center gap-1 text-sm font-medium text-slate-600 dark:text-slate-300">
+                  <span>{stat.title}</span>
+                  <span title={stat.description} className="inline-flex cursor-help items-center rounded p-0.5 hover:bg-slate-100 dark:hover:bg-slate-800">
+                    <Info className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500" />
                   </span>
                 </CardTitle>
-                <stat.icon className={`h-8 w-8 ${stat.iconColor}`} />
+                <div className="rounded-md bg-slate-50 p-2 dark:bg-slate-900">
+                  <stat.icon className={`h-5 w-5 ${stat.iconTone} dark:opacity-90`} />
+                </div>
               </div>
-              <div className="mb-2 text-3xl font-bold text-white">{stat.value}</div>
-              <p className={`text-xs ${stat.iconColor}`}>{stat.description}</p>
-              <Link href={stat.href} className={`mt-3 inline-block text-xs font-semibold ${stat.iconColor} underline`}>
-                Drill down
+              <div className={`mb-1 text-3xl font-bold tracking-tight ${stat.valueTone}`}>{stat.value}</div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{stat.description}</p>
+              <Link href={stat.href} className="mt-3 inline-block text-xs font-semibold text-blue-600 hover:underline dark:text-blue-300">
+                View details
               </Link>
             </div>
           </Card>
@@ -293,9 +303,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <Card className="shadow-lg">
-          <CardHeader className="bg-gradient-to-r from-red-50 to-orange-50">
-            <CardTitle className="flex items-center gap-2 text-lg">
+        <Card className="border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+          <CardHeader className="bg-gradient-to-r from-red-50 to-orange-50 dark:from-slate-900 dark:to-slate-900">
+            <CardTitle className="flex items-center gap-2 text-lg text-slate-900 dark:text-slate-100">
               <AlertCircle className="h-5 w-5 text-red-600" />
               Alerts
             </CardTitle>
@@ -312,16 +322,16 @@ export default function DashboardPage() {
                   )}
                   {alert.type === "info" && <Package className="mt-0.5 h-5 w-5 text-blue-600" />}
                   {alert.type === "error" && <Clock className="mt-0.5 h-5 w-5 text-red-600" />}
-                  <p className="text-sm font-medium text-gray-900">{alert.message}</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-slate-100">{alert.message}</p>
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
 
-        <Card className="shadow-lg">
-          <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50">
-            <CardTitle className="flex items-center gap-2 text-lg">
+        <Card className="border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+          <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-900">
+            <CardTitle className="flex items-center gap-2 text-lg text-slate-900 dark:text-slate-100">
               <Clock className="h-5 w-5 text-blue-600" />
               Recent Activity
             </CardTitle>
@@ -334,7 +344,7 @@ export default function DashboardPage() {
                   className="flex items-center justify-between rounded-lg bg-gray-50 p-3 hover:bg-gray-100"
                 >
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">{activity.action}</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-slate-100">{activity.action}</p>
                     {activity.href ? (
                       <Link href={activity.href} className="mt-1 block text-xs font-medium text-blue-600 hover:underline">
                         {activity.ref}
@@ -343,11 +353,11 @@ export default function DashboardPage() {
                       <p className="mt-1 text-xs font-medium text-blue-600">{activity.ref}</p>
                     )}
                   </div>
-                  <div className="text-xs text-gray-500">{activity.time}</div>
+                  <div className="text-xs text-gray-500 dark:text-slate-400">{activity.time}</div>
                 </div>
               ))}
               {recentActivity.length === 0 && (
-                <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600">No recent activity</div>
+                <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600 dark:bg-slate-900 dark:text-slate-300">No recent activity</div>
               )}
             </div>
           </CardContent>

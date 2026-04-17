@@ -63,7 +63,14 @@ export async function POST() {
           OR UPPER(c.client_code) = UPPER(split_part(COALESCE(u.email, ''), '@', 1))
         )
        WHERE u.is_active = true
-         AND UPPER(COALESCE(primary_role.role_code, u.role)) IN ('CLIENT', 'VIEWER')
+         AND UPPER(COALESCE(primary_role.role_code, u.role)) IN (
+           'CLIENT',
+           'VIEWER',
+           'CUSTOMER',
+           'CLIENT_USER',
+           'READONLY',
+           'READ_ONLY'
+         )
        ON CONFLICT (company_id, user_id, client_id)
        DO UPDATE SET is_active = EXCLUDED.is_active
        RETURNING id`

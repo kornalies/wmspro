@@ -1,7 +1,7 @@
 "use client"
 
-import { FormEvent, useMemo, useState } from "react"
-import { LogOut, Moon, Search, Sun } from "lucide-react"
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
+import { LogOut, Menu, Moon, Search, Sun } from "lucide-react"
 import { usePathname, useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { useTheme } from "next-themes"
@@ -27,6 +27,8 @@ export function AppHeader() {
   const logoutMutation = useLogout()
   const { theme, setTheme } = useTheme()
   const [globalSearch, setGlobalSearch] = useState("")
+  const [showProfileMenu, setShowProfileMenu] = useState(false)
+  const profileMenuRef = useRef<HTMLDivElement | null>(null)
   const switchCompanyMutation = useSwitchCompany()
   const canSwitchCompany =
     user?.permissions?.includes("admin.companies.manage") || user?.role === "SUPER_ADMIN"
@@ -91,10 +93,37 @@ export function AppHeader() {
     router.push(`/stock/search?serial=${encodeURIComponent(term)}`)
   }
 
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!profileMenuRef.current) return
+      const target = event.target as Node
+      if (!profileMenuRef.current.contains(target)) {
+        setShowProfileMenu(false)
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown)
+    return () => document.removeEventListener("mousedown", onPointerDown)
+  }, [])
+
   return (
     <div className="flex min-h-16 flex-col gap-2 px-4 py-2 md:flex-row md:items-center md:justify-between">
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold">WMS - GWU Software Solutions</h2>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 md:hidden"
+            onClick={() => {
+              const event = new CustomEvent("wms:toggle-mobile-sidebar")
+              window.dispatchEvent(event)
+            }}
+            title="Open menu"
+          >
+            <Menu className="h-4 w-4" />
+          </Button>
+          <h2 className="text-lg font-semibold">WMSPro - GWU Software Solutions</h2>
+        </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>Home</span>
           {crumbs.map((crumb, index) => (
@@ -143,27 +172,44 @@ export function AppHeader() {
             ))}
           </select>
         )}
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="h-9 w-9"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          title="Toggle theme"
-        >
-          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </Button>
-        <span className="text-sm text-gray-600">{user?.full_name || user?.username || "User"}</span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onLogout}
-          disabled={logoutMutation.isPending}
-        >
-          <LogOut className="h-4 w-4" />
-          Logout
-        </Button>
+        <div ref={profileMenuRef} className="relative">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-w-[120px] justify-between"
+            onClick={() => setShowProfileMenu((prev) => !prev)}
+          >
+            {user?.full_name || user?.username || "User"}
+          </Button>
+          {showProfileMenu && (
+            <div className="absolute right-0 z-50 mt-2 w-52 rounded-md border bg-white p-1 shadow-lg dark:bg-slate-950">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
+                onClick={() => {
+                  setTheme(theme === "dark" ? "light" : "dark")
+                  setShowProfileMenu(false)
+                }}
+              >
+                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {theme === "dark" ? "Use light mode" : "Use dark mode"}
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                onClick={() => {
+                  setShowProfileMenu(false)
+                  void onLogout()
+                }}
+                disabled={logoutMutation.isPending}
+              >
+                <LogOut className="h-4 w-4" />
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

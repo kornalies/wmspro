@@ -148,8 +148,8 @@ export function GRNList() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">GRN (Goods Receipt Notes)</h1>
-          <p className="mt-1 text-gray-500">Manage incoming goods receipts</p>
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">GRN (Goods Receipt Notes)</h1>
+          <p className="mt-1 text-slate-600 dark:text-slate-300">Manage incoming goods receipts</p>
         </div>
         <div className="flex gap-2">
           <Button asChild variant="outline">
@@ -227,10 +227,10 @@ export function GRNList() {
         </div>
       )}
 
-      <div className="rounded-lg border bg-white shadow-sm">
+      <div className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
         <Table>
           <TableHeader>
-            <TableRow className="bg-gray-50">
+            <TableRow className="bg-slate-50 dark:bg-slate-900">
               <TableHead>GRN Number</TableHead>
               <TableHead>Date</TableHead>
               <TableHead>Client</TableHead>
@@ -253,7 +253,7 @@ export function GRNList() {
               </TableRow>
             ) : (
               rows.map((grn) => (
-                <TableRow key={grn.id} className="hover:bg-gray-50">
+                <TableRow key={grn.id} className="hover:bg-slate-50 dark:hover:bg-slate-900">
                   <TableCell className="font-medium text-blue-700">{grn.grn_number}</TableCell>
                   <TableCell>{formatDate(grn.grn_date)}</TableCell>
                   <TableCell>{grn.client_name}</TableCell>
@@ -313,7 +313,7 @@ export function GRNList() {
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
           Page {page} of {totalPages} ({total} records)
           {isFetching ? " • refreshing..." : ""}
         </p>

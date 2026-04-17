@@ -160,8 +160,8 @@ export default function DOPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Delivery Orders</h1>
-            <p className="mt-1 text-gray-500">Manage outbound deliveries</p>
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">Delivery Orders</h1>
+            <p className="mt-1 text-slate-600 dark:text-slate-300">Manage outbound deliveries</p>
           </div>
           <div className="flex items-center gap-2">
             <Link href="/do/waves">
@@ -178,12 +178,12 @@ export default function DOPage() {
 
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {[
-            { label: "Total DOs", value: rows.length, color: "bg-blue-50 border-blue-200 text-blue-900", textColor: "text-blue-600" },
-            { label: "Pending", value: rows.filter((d) => d.status === "PENDING" || d.status === "DRAFT").length, color: "bg-yellow-50 border-yellow-200 text-yellow-900", textColor: "text-yellow-600" },
-            { label: "Picked", value: rows.filter((d) => d.status === "PICKED").length, color: "bg-indigo-50 border-indigo-200 text-indigo-900", textColor: "text-indigo-600" },
-            { label: "Staged", value: rows.filter((d) => d.status === "STAGED").length, color: "bg-purple-50 border-purple-200 text-purple-900", textColor: "text-purple-600" },
-            { label: "Completed", value: rows.filter((d) => d.status === "COMPLETED").length, color: "bg-green-50 border-green-200 text-green-900", textColor: "text-green-600" },
-            { label: "Partial", value: rows.filter((d) => d.status === "PARTIALLY_FULFILLED").length, color: "bg-orange-50 border-orange-200 text-orange-900", textColor: "text-orange-600" },
+            { label: "Total DOs", value: rows.length, color: "border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/25 dark:text-blue-100", textColor: "text-blue-600 dark:text-blue-300" },
+            { label: "Pending", value: rows.filter((d) => d.status === "PENDING" || d.status === "DRAFT").length, color: "border-yellow-200 bg-yellow-50 text-yellow-900 dark:border-yellow-900/60 dark:bg-yellow-950/25 dark:text-yellow-100", textColor: "text-yellow-600 dark:text-yellow-300" },
+            { label: "Picked", value: rows.filter((d) => d.status === "PICKED").length, color: "border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-900/60 dark:bg-indigo-950/25 dark:text-indigo-100", textColor: "text-indigo-600 dark:text-indigo-300" },
+            { label: "Staged", value: rows.filter((d) => d.status === "STAGED").length, color: "border-purple-200 bg-purple-50 text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/25 dark:text-purple-100", textColor: "text-purple-600 dark:text-purple-300" },
+            { label: "Completed", value: rows.filter((d) => d.status === "COMPLETED").length, color: "border-green-200 bg-green-50 text-green-900 dark:border-green-900/60 dark:bg-green-950/25 dark:text-green-100", textColor: "text-green-600 dark:text-green-300" },
+            { label: "Partial", value: rows.filter((d) => d.status === "PARTIALLY_FULFILLED").length, color: "border-orange-200 bg-orange-50 text-orange-900 dark:border-orange-900/60 dark:bg-orange-950/25 dark:text-orange-100", textColor: "text-orange-600 dark:text-orange-300" },
           ].map((stat) => (
             <div key={stat.label} className={`rounded-lg border p-4 ${stat.color}`}>
               <p className={`text-sm font-medium ${stat.textColor}`}>{stat.label}</p>
@@ -233,10 +233,10 @@ export default function DOPage() {
           </Select>
         </div>
 
-        <div className="rounded-lg border bg-white shadow">
+        <div className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
           <Table>
             <TableHeader>
-              <TableRow className="bg-gray-50">
+              <TableRow className="bg-slate-50 dark:bg-slate-900">
                 <TableHead>DO Number</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Client</TableHead>
@@ -254,7 +254,7 @@ export default function DOPage() {
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={12} className="py-8 text-center text-gray-500">
+                  <TableCell colSpan={12} className="py-8 text-center text-slate-500 dark:text-slate-400">
                     No delivery orders found
                   </TableCell>
                 </TableRow>
@@ -271,8 +271,8 @@ export default function DOPage() {
                       : 0
 
                   return (
-                    <TableRow key={doItem.id} className="hover:bg-gray-50">
-                      <TableCell className="font-mono font-medium text-blue-700">
+                    <TableRow key={doItem.id} className="hover:bg-slate-50 dark:hover:bg-slate-900">
+                      <TableCell className="font-mono font-medium text-blue-700 dark:text-blue-300">
                         <Link
                           href={`/do/${encodeURIComponent(doItem.do_number)}/fulfill`}
                           className="hover:underline"
@@ -290,7 +290,7 @@ export default function DOPage() {
                       <TableCell className="text-right">{doItem.total_quantity_dispatched}</TableCell>
                       <TableCell className="w-32">
                         <div className="flex items-center gap-2">
-                          <div className="h-2 flex-1 rounded-full bg-gray-200">
+                          <div className="h-2 flex-1 rounded-full bg-slate-200 dark:bg-slate-700">
                             <div
                               className={`h-2 rounded-full ${
                                 fulfillmentPercentage === 100
@@ -302,7 +302,7 @@ export default function DOPage() {
                               style={{ width: `${fulfillmentPercentage}%` }}
                             />
                           </div>
-                          <span className="w-8 text-xs text-gray-500">{fulfillmentPercentage}%</span>
+                          <span className="w-8 text-xs text-slate-500 dark:text-slate-400">{fulfillmentPercentage}%</span>
                         </div>
                       </TableCell>
                       <TableCell>{getStatusBadge(doItem.status)}</TableCell>
@@ -319,7 +319,7 @@ export default function DOPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              <Printer className="h-4 w-4 text-slate-700" />
+                              <Printer className="h-4 w-4 text-slate-700 dark:text-slate-300" />
                             </a>
                           </Button>
                           <Button asChild variant="ghost" size="sm" title="Print Packing Slip">
@@ -328,7 +328,7 @@ export default function DOPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              <FileText className="h-4 w-4 text-indigo-700" />
+                              <FileText className="h-4 w-4 text-indigo-700 dark:text-indigo-300" />
                             </a>
                           </Button>
                           {(doItem.status === "STAGED" || doItem.status === "PARTIALLY_FULFILLED") && (
