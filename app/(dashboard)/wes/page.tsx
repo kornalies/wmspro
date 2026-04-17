@@ -115,8 +115,8 @@ export default function WESPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">WES Orchestration</h1>
-          <p className="mt-1 text-gray-500">
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">WES Orchestration</h1>
+          <p className="mt-1 text-slate-600 dark:text-slate-300">
             Event bus + command channel + adapter abstraction + guarded state/failover
           </p>
         </div>
@@ -127,11 +127,11 @@ export default function WESPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-5">
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Total Cmd</p><p className="text-2xl font-bold">{monitorPayload.summary?.total_commands || 0}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Queued</p><p className="text-2xl font-bold text-blue-700">{monitorPayload.summary?.queued || 0}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Retry</p><p className="text-2xl font-bold text-amber-700">{monitorPayload.summary?.retry || 0}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Done</p><p className="text-2xl font-bold text-emerald-700">{monitorPayload.summary?.done || 0}</p></CardContent></Card>
-        <Card><CardContent className="pt-4"><p className="text-xs text-gray-500">Dead Letter</p><p className="text-2xl font-bold text-red-700">{monitorPayload.summary?.dead_letter || 0}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-slate-500 dark:text-slate-400">Total Cmd</p><p className="text-2xl font-bold">{monitorPayload.summary?.total_commands || 0}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-slate-500 dark:text-slate-400">Queued</p><p className="text-2xl font-bold text-blue-700 dark:text-blue-300">{monitorPayload.summary?.queued || 0}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-slate-500 dark:text-slate-400">Retry</p><p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{monitorPayload.summary?.retry || 0}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-slate-500 dark:text-slate-400">Done</p><p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{monitorPayload.summary?.done || 0}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-slate-500 dark:text-slate-400">Dead Letter</p><p className="text-2xl font-bold text-red-700 dark:text-red-300">{monitorPayload.summary?.dead_letter || 0}</p></CardContent></Card>
       </div>
 
       <Card>
@@ -194,7 +194,7 @@ export default function WESPage() {
               {equipment.map((row) => (
                 <TableRow
                   key={row.id}
-                  className={selectedEquipmentId === row.id ? "bg-blue-50" : ""}
+                  className={selectedEquipmentId === row.id ? "bg-blue-50 dark:bg-blue-950/30" : ""}
                   onClick={() => setSelectedEquipmentId(row.id)}
                 >
                   <TableCell className="font-mono text-xs">{row.equipment_code}</TableCell>
@@ -202,7 +202,7 @@ export default function WESPage() {
                   <TableCell>{row.equipment_type}</TableCell>
                   <TableCell>{row.adapter_type}</TableCell>
                   <TableCell>
-                    <Badge className={row.status === "FAULT" || row.status === "ESTOP" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-700"}>{row.status}</Badge>
+                    <Badge className={row.status === "FAULT" || row.status === "ESTOP" ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}>{row.status}</Badge>
                   </TableCell>
                   <TableCell>{row.safety_mode ? "ON" : "OFF"}</TableCell>
                 </TableRow>
@@ -231,7 +231,7 @@ export default function WESPage() {
               </SelectContent>
             </Select>
             <textarea
-              className="rounded border p-2 font-mono text-xs md:col-span-2"
+              className="rounded border border-slate-300 bg-white p-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 md:col-span-2"
               value={commandPayload}
               onChange={(e) => setCommandPayload(e.target.value)}
             />
@@ -270,7 +270,7 @@ export default function WESPage() {
                   <TableCell>{row.command_type}</TableCell>
                   <TableCell>{row.status}</TableCell>
                   <TableCell className="text-right">{row.attempt_count}/{row.max_attempts}</TableCell>
-                  <TableCell className="text-xs text-red-600">{row.last_error || "-"}</TableCell>
+                  <TableCell className="text-xs text-red-600 dark:text-red-300">{row.last_error || "-"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -299,7 +299,7 @@ export default function WESPage() {
                   <TableCell>{row.equipment_code || row.equipment_id || "-"}</TableCell>
                   <TableCell>{row.severity}</TableCell>
                   <TableCell>
-                    <Badge className={row.status === "OPEN" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-700"}>{row.status}</Badge>
+                    <Badge className={row.status === "OPEN" ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}>{row.status}</Badge>
                   </TableCell>
                   <TableCell className="max-w-[380px] truncate text-xs">{row.reason}</TableCell>
                   <TableCell className="text-right">
@@ -324,7 +324,7 @@ export default function WESPage() {
               ))}
               {!incidents.length ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-gray-500">No failover incidents</TableCell>
+                  <TableCell colSpan={6} className="text-center text-slate-500 dark:text-slate-400">No failover incidents</TableCell>
                 </TableRow>
               ) : null}
             </TableBody>
@@ -333,7 +333,7 @@ export default function WESPage() {
       </Card>
 
       {selectedEquipment ? (
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
           Selected equipment: {selectedEquipment.equipment_code} ({selectedEquipment.status})
         </p>
       ) : null}

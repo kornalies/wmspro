@@ -17,7 +17,26 @@ function required(name, localFallback) {
 }
 
 async function ensureRuntimeRole(client) {
-  await client.query(`
+  let savepointId = 0
+  const safeExec = async (sql) => {
+    const sp = `seed_grant_sp_${++savepointId}`
+    await client.query(`SAVEPOINT ${sp}`)
+    try {
+      await client.query(sql)
+      await client.query(`RELEASE SAVEPOINT ${sp}`)
+    } catch (error) {
+      await client.query(`ROLLBACK TO SAVEPOINT ${sp}`)
+      await client.query(`RELEASE SAVEPOINT ${sp}`)
+      const message = error instanceof Error ? error.message : String(error)
+      if (/permission denied|insufficient privilege|must be owner/i.test(message)) {
+        console.warn(`Warning: skipped grant statement due to privileges: ${message}`)
+        return
+      }
+      throw error
+    }
+  }
+
+  await safeExec(`
     DO $$
     BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wms_app') THEN
@@ -33,18 +52,56 @@ async function ensureRuntimeRole(client) {
     END
     $$;
   `)
-  await client.query(`DO $$ BEGIN EXECUTE format('GRANT CONNECT, TEMP ON DATABASE %I TO wms_app', current_database()); END $$;`)
-  await client.query(`GRANT USAGE ON SCHEMA public TO wms_app`)
-  await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms_app`)
-  await client.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms_app`)
+  await safeExec(`DO $$ BEGIN EXECUTE format('GRANT CONNECT, TEMP ON DATABASE %I TO wms_app', current_database()); END $$;`)
+  await safeExec(`GRANT USAGE ON SCHEMA public TO wms_app`)
+  await safeExec(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms_app`)
+  await safeExec(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms_app`)
+  await safeExec(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO wms_app`)
+
+  // Some installs contain legacy tables/sequences created by a different owner.
+  // Ensure runtime role can access LP sync tables used by smoke fixtures.
+  await safeExec(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'mobile_lp_records'
+      ) THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.mobile_lp_records TO wms_app;
+      END IF;
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.sequences
+        WHERE sequence_schema = 'public' AND sequence_name = 'mobile_lp_records_id_seq'
+      ) THEN
+        GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.mobile_lp_records_id_seq TO wms_app;
+      END IF;
+    END
+    $$;
+  `)
 }
 
 async function ensureRbacSeed(client, userId) {
-  await client.query(
-    `INSERT INTO rbac_roles (role_code, role_name, description, is_system, is_active)
-     VALUES ('SUPER_ADMIN', 'Super Admin', 'CI seeded super admin role', true, true)
-     ON CONFLICT (role_code) DO NOTHING`
-  )
+  const roleSeeds = [
+    ["SUPER_ADMIN", "Super Admin", "CI seeded super admin role", true],
+    ["ADMIN", "Admin", "Tenant admin role", true],
+    ["CLIENT", "Client", "Client portal role", true],
+    ["VIEWER", "Viewer", "Read-only client portal role", true],
+  ]
+  for (const [roleCode, roleName, description, isSystem] of roleSeeds) {
+    await client.query(
+      `INSERT INTO rbac_roles (role_code, role_name, description, is_system, is_active)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (role_code)
+       DO UPDATE SET
+         role_name = EXCLUDED.role_name,
+         description = EXCLUDED.description,
+         is_system = EXCLUDED.is_system,
+         is_active = true`,
+      [roleCode, roleName, description, isSystem]
+    )
+  }
 
   const permissionSeeds = [
     ["admin.users.manage", "Manage Users"],
@@ -64,6 +121,13 @@ async function ensureRbacSeed(client, userId) {
     ["billing.view", "View Billing"],
     ["billing.generate_invoice", "Generate Billing Invoices"],
     ["stock.adjust", "Adjust Stock"],
+    ["portal.client.view", "Access Client Portal"],
+    ["portal.inventory.view", "View Portal Inventory"],
+    ["portal.orders.view", "View Portal Orders"],
+    ["portal.billing.view", "View Portal Billing"],
+    ["portal.reports.view", "View Portal Reports"],
+    ["portal.asn.view", "View Portal ASN"],
+    ["portal.asn.create", "Create Portal ASN"],
   ]
 
   for (const [permissionKey, permissionName] of permissionSeeds) {
@@ -83,6 +147,16 @@ async function ensureRbacSeed(client, userId) {
      WHERE r.role_code = 'SUPER_ADMIN'
      ON CONFLICT DO NOTHING`,
     [permissionSeeds.map(([key]) => key)]
+  )
+
+  await client.query(
+    `INSERT INTO rbac_role_permissions (role_id, permission_id)
+     SELECT r.id, p.id
+     FROM rbac_roles r
+     JOIN rbac_permissions p ON p.permission_key = ANY($1::text[])
+     WHERE r.role_code IN ('CLIENT', 'VIEWER')
+     ON CONFLICT DO NOTHING`,
+    [["portal.client.view"]]
   )
 
   await client.query("DELETE FROM rbac_user_roles WHERE user_id = $1", [userId])
@@ -247,34 +321,55 @@ async function ensureStagedDoFixture(client, {
     [companyId, doId]
   )
 
-  await client.query(
-    `INSERT INTO stock_serial_numbers (
-       company_id, serial_number, item_id, client_id, warehouse_id, status, received_date, do_line_item_id, grn_line_item_id
-     )
-     VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, NULL, $6)
-     ON CONFLICT DO NOTHING`,
-    [companyId, serialNumber, itemId, clientId, warehouseId, seededGrnLineId]
-  )
+  try {
+    await client.query(
+      `INSERT INTO stock_serial_numbers (
+         company_id, serial_number, item_id, client_id, warehouse_id, status, received_date, do_line_item_id, grn_line_item_id
+       )
+       VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, NULL, $6)
+       ON CONFLICT DO NOTHING`,
+      [companyId, serialNumber, itemId, clientId, warehouseId, seededGrnLineId]
+    )
 
-  await client.query(
-    `UPDATE stock_serial_numbers
-     SET item_id = $1,
-         client_id = $2,
-         warehouse_id = $3,
-         status = 'IN_STOCK',
-         do_line_item_id = NULL,
-         grn_line_item_id = $4,
-         dispatched_date = NULL,
-         received_date = CURRENT_DATE
-     WHERE company_id = $5
-       AND serial_number = $6`,
-    [itemId, clientId, warehouseId, seededGrnLineId, companyId, serialNumber]
-  )
+    await client.query(
+      `UPDATE stock_serial_numbers
+       SET item_id = $1,
+           client_id = $2,
+           warehouse_id = $3,
+           status = 'IN_STOCK',
+           do_line_item_id = NULL,
+           grn_line_item_id = $4,
+           dispatched_date = NULL,
+           received_date = COALESCE(received_date, CURRENT_DATE)
+       WHERE company_id = $5
+         AND serial_number = $6
+         AND (
+           item_id IS DISTINCT FROM $1
+           OR client_id IS DISTINCT FROM $2
+           OR warehouse_id IS DISTINCT FROM $3
+           OR status IS DISTINCT FROM 'IN_STOCK'
+           OR do_line_item_id IS NOT NULL
+           OR grn_line_item_id IS DISTINCT FROM $4
+           OR dispatched_date IS NOT NULL
+           OR received_date IS NULL
+         )`,
+      [itemId, clientId, warehouseId, seededGrnLineId, companyId, serialNumber]
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/permission denied for table mobile_lp_records/i.test(message)) {
+      console.warn(
+        "Warning: skipped stock serial fixture due to mobile_lp_records permission; staged DO fixture remains available."
+      )
+      return
+    }
+    throw error
+  }
 }
 
 async function main() {
   const databaseUrl = process.env.MIGRATOR_DATABASE_URL || required("DATABASE_URL")
-  const companyCode = required("WMS_COMPANY_CODE", "GWU").toUpperCase()
+  const companyCode = required("WMS_COMPANY_CODE", "DEFAULT").toUpperCase()
   const username = required("WMS_USERNAME", "wms_ci")
   const password = required("WMS_PASSWORD", "wms_ci_password")
   const passwordHash = await bcrypt.hash(password, 10)
@@ -292,7 +387,7 @@ async function main() {
        ON CONFLICT (company_code)
        DO UPDATE SET company_name = EXCLUDED.company_name, updated_at = CURRENT_TIMESTAMP
        RETURNING id`,
-      [companyCode, "GWU CI Company"]
+      [companyCode, `${companyCode} CI Company`]
     )
     const companyId = Number(companyResult.rows[0].id)
     await client.query("SELECT set_config('app.company_id', $1, true)", [String(companyId)])
@@ -343,13 +438,27 @@ async function main() {
     const userId = Number(userResult.rows[0].id)
 
     await ensureRbacSeed(client, userId)
-    await ensureStagedDoFixture(client, {
-      companyId,
-      clientId,
-      warehouseId,
-      itemId,
-      userId,
-    })
+    try {
+      await ensureStagedDoFixture(client, {
+        companyId,
+        clientId,
+        warehouseId,
+        itemId,
+        userId,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (
+        /permission denied for table mobile_lp_records/i.test(message) ||
+        /stock_movements_movement_number_key/i.test(message)
+      ) {
+        console.warn(
+          `Warning: staged stock fixture partially skipped due to runtime ownership/idempotency constraints (${message}). Core tenant/user seed completed.`
+        )
+      } else {
+        throw error
+      }
+    }
 
     await client.query("COMMIT")
     console.log("Seed completed.")

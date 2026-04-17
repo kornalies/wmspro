@@ -1,6 +1,6 @@
 "use client"
 
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -22,6 +22,7 @@ type FormValues = z.infer<typeof schema>
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const loginMutation = useLogin()
 
   const {
@@ -39,8 +40,23 @@ export default function LoginPage() {
 
   const onSubmit = async (values: FormValues) => {
     try {
-      await loginMutation.mutateAsync(values)
-      router.push("/dashboard")
+      const loginResult = await loginMutation.mutateAsync(values)
+      const nextParam = String(searchParams.get("next") || "")
+      const user = loginResult?.data
+      const role = String(user?.role || "").toUpperCase()
+      const isPortalOnlyRole =
+        role === "CLIENT" ||
+        role === "VIEWER" ||
+        role === "CUSTOMER" ||
+        role === "CLIENT_USER" ||
+        role === "READONLY" ||
+        role === "READ_ONLY"
+      const defaultRoute = isPortalOnlyRole ? "/portal" : "/dashboard"
+      const safeNext =
+        nextParam.startsWith("/") && !nextParam.startsWith("//") && !nextParam.startsWith("/login")
+          ? nextParam
+          : defaultRoute
+      router.push(safeNext)
     } catch (error) {
       handleError(error, "Login failed")
     }

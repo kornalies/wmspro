@@ -29,13 +29,13 @@ export default function GateOutList() {
     ];
 
     return (
-        <div className="rounded-md border bg-white mt-6">
-            <div className="p-4 border-b">
+        <div className="mt-6 rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <div className="border-b border-slate-200 p-4 dark:border-slate-800">
                 <h3 className="text-lg font-semibold">Gate Exit History</h3>
             </div>
             <Table>
                 <TableHeader>
-                    <TableRow>
+                    <TableRow className="bg-slate-50 dark:bg-slate-900">
                         <TableHead>Vehicle No.</TableHead>
                         <TableHead>Driver</TableHead>
                         <TableHead>Out Time</TableHead>

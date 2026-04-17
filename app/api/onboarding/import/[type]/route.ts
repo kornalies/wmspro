@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { getClient, query, setTenantContext } from "@/lib/db"
 import { parseBoolean, parseCsv, parseNumber, type CsvRow } from "@/lib/csv-import"
+import { normalizeRoleCode } from "@/lib/role-utils"
 
 type ImportType = "clients" | "items" | "users" | "opening-stock" | "rate-cards"
 
@@ -162,7 +163,7 @@ async function importUsers(rows: CsvRow[], sessionUserId: number): Promise<Impor
       const username = getRequiredField(row, "username")
       const fullName = getRequiredField(row, "full_name")
       const email = getRequiredField(row, "email")
-      const roleCode = getRequiredField(row, "role").toUpperCase()
+      const roleCode = normalizeRoleCode(getRequiredField(row, "role"))
       const roleResult = await query(
         "SELECT id, role_code FROM rbac_roles WHERE role_code = $1 AND is_active = true",
         [roleCode]

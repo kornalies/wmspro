@@ -140,6 +140,7 @@ export default function CompaniesPage() {
         subscription_plan: form.subscription_plan,
         storage_used_gb: Number(form.storage_used_gb || 0),
         billing_status: form.billing_status,
+        is_active: form.is_active,
         admin_username: form.admin_username,
         admin_email: form.admin_email,
         admin_full_name: form.admin_full_name,
@@ -201,7 +202,7 @@ export default function CompaniesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <div className="space-y-2">
                   <Label>Subscription Plan</Label>
                   <Select
@@ -249,6 +250,26 @@ export default function CompaniesPage() {
                       <SelectItem value="ACTIVE">ACTIVE</SelectItem>
                       <SelectItem value="PAST_DUE">PAST_DUE</SelectItem>
                       <SelectItem value="SUSPENDED">SUSPENDED</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select
+                    value={form.is_active ? "ACTIVE" : "INACTIVE"}
+                    onValueChange={(v) =>
+                      setForm({
+                        ...form,
+                        is_active: v === "ACTIVE",
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">ACTIVE</SelectItem>
+                      <SelectItem value="INACTIVE">INACTIVE</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

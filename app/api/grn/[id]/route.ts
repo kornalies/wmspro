@@ -292,28 +292,171 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 }
 
 export async function DELETE(_: NextRequest, context: RouteContext) {
+  const db = await getClient()
   try {
     const session = await getSession()
     if (!session) {
       return fail("UNAUTHORIZED", "Unauthorized", 401)
     }
-
     requirePermission(session, "grn.manage")
 
     const { id: grnId } = await context.params
 
-    const result = await query(
-      "UPDATE grn_header SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND company_id = $3",
-      ["CANCELLED", grnId, session.companyId]
+    await db.query("BEGIN")
+    await setTenantContext(db, session.companyId)
+
+    const headerRes = await db.query(
+      `SELECT id, grn_number, status
+       FROM grn_header
+       WHERE id = $1
+         AND company_id = $2
+       FOR UPDATE`,
+      [grnId, session.companyId]
     )
-    if (result.rowCount === 0) {
+    if (!headerRes.rows.length) {
+      await db.query("ROLLBACK")
       return fail("NOT_FOUND", "GRN not found", 404)
     }
 
-    return ok(null, "GRN cancelled successfully")
+    const header = headerRes.rows[0] as { status: string; grn_number: string }
+    const currentStatus = String(header.status || "").toUpperCase()
+
+    if (currentStatus === "CANCELLED") {
+      await db.query("ROLLBACK")
+      return ok(
+        {
+          id: Number(grnId),
+          status: "CANCELLED",
+          reversed_stock_count: 0,
+          voided_billing_tx_count: 0,
+        },
+        "GRN is already cancelled"
+      )
+    }
+
+    if (!["DRAFT", "CONFIRMED", "COMPLETED"].includes(currentStatus)) {
+      await db.query("ROLLBACK")
+      return fail("INVALID_STATUS", `GRN in status ${currentStatus} cannot be cancelled`, 409)
+    }
+
+    const billedRes = await db.query(
+      `SELECT DISTINCT
+         ih.id AS invoice_id,
+         ih.invoice_number
+       FROM billing_transactions bt
+       LEFT JOIN invoice_header ih
+         ON ih.id = bt.invoice_id
+        AND ih.company_id = bt.company_id
+       WHERE bt.company_id = $1
+         AND bt.source_type = 'GRN'
+         AND bt.source_doc_id = $2
+         AND bt.status = 'BILLED'
+       ORDER BY ih.id DESC`,
+      [session.companyId, grnId]
+    )
+    if (billedRes.rows.length > 0) {
+      const invoiceNumbers = billedRes.rows
+        .map((row: { invoice_id: number | null; invoice_number: string | null }) =>
+          String(row.invoice_number || row.invoice_id)
+        )
+        .filter(Boolean)
+      await db.query("ROLLBACK")
+      return fail(
+        "GRN_BILLED",
+        `GRN ${header.grn_number} is already billed in invoice(s): ${invoiceNumbers.join(", ")}. Reverse the invoice first (credit note/unbill), then retry GRN cancellation.`,
+        409
+      )
+    }
+
+    const lineRes = await db.query(
+      `SELECT id
+       FROM grn_line_items
+       WHERE company_id = $1
+         AND grn_header_id = $2
+       FOR UPDATE`,
+      [session.companyId, grnId]
+    )
+    const lineIds = lineRes.rows.map((row: { id: number }) => Number(row.id)).filter(Boolean)
+
+    let reversedStockCount = 0
+    if (lineIds.length > 0) {
+      const blockedStock = await db.query(
+        `SELECT id, serial_number, status, do_line_item_id
+         FROM stock_serial_numbers
+         WHERE company_id = $1
+           AND grn_line_item_id = ANY($2::int[])
+           AND (
+             do_line_item_id IS NOT NULL
+             OR status IN ('RESERVED', 'DISPATCHED')
+           )
+         ORDER BY id
+         LIMIT 5`,
+        [session.companyId, lineIds]
+      )
+
+      if (blockedStock.rows.length > 0) {
+        const preview = blockedStock.rows
+          .map((row: { serial_number: string; status: string }) => `${row.serial_number}(${row.status})`)
+          .join(", ")
+        await db.query("ROLLBACK")
+        return fail(
+          "GRN_STOCK_IN_USE",
+          `Cannot cancel GRN because received stock is already allocated/dispatched: ${preview}. Reverse related DO activity first.`,
+          409
+        )
+      }
+
+      const deleteStockRes = await db.query(
+        `DELETE FROM stock_serial_numbers
+         WHERE company_id = $1
+           AND grn_line_item_id = ANY($2::int[])`,
+        [session.companyId, lineIds]
+      )
+      reversedStockCount = deleteStockRes.rowCount || 0
+    }
+
+    const voidBillingRes = await db.query(
+      `UPDATE billing_transactions
+       SET status = 'VOID',
+           invoice_id = NULL,
+           billed_at = NULL,
+           billed_by = NULL,
+           updated_by = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $2
+         AND source_type = 'GRN'
+         AND source_doc_id = $3
+         AND status IN ('UNRATED', 'UNBILLED')
+       RETURNING id`,
+      [session.userId ?? null, session.companyId, grnId]
+    )
+    const voidedBillingCount = voidBillingRes.rowCount || 0
+
+    await db.query(
+      `UPDATE grn_header
+       SET status = 'CANCELLED',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+         AND company_id = $2`,
+      [grnId, session.companyId]
+    )
+
+    await db.query("COMMIT")
+    return ok(
+      {
+        id: Number(grnId),
+        status: "CANCELLED",
+        reversed_stock_count: reversedStockCount,
+        voided_billing_tx_count: voidedBillingCount,
+      },
+      "GRN cancelled and reversed successfully"
+    )
   } catch (error: unknown) {
+    await db.query("ROLLBACK")
     const message = error instanceof Error ? error.message : "Failed to cancel GRN"
     return fail("SERVER_ERROR", message, 500)
+  } finally {
+    db.release()
   }
 }
 

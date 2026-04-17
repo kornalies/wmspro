@@ -90,6 +90,30 @@ export default async function proxy(request: NextRequest) {
     return applyEnterpriseHeaders(response, requestId, request)
   }
 
+  const role = String(payload.role || "").toUpperCase()
+  const isPortalOnlyRole =
+    role === "CLIENT" ||
+    role === "VIEWER" ||
+    role === "CUSTOMER" ||
+    role === "CLIENT_USER" ||
+    role === "READONLY" ||
+    role === "READ_ONLY"
+  const isInternalWmsPath =
+    path.startsWith("/dashboard") ||
+    path.startsWith("/grn") ||
+    path.startsWith("/do") ||
+    path.startsWith("/stock") ||
+    path.startsWith("/gate") ||
+    path.startsWith("/admin") ||
+    path.startsWith("/finance") ||
+    path.startsWith("/reports") ||
+    path.startsWith("/labor") ||
+    path.startsWith("/integrations") ||
+    path.startsWith("/wes")
+  if (isPortalOnlyRole && isInternalWmsPath) {
+    return redirectWithHeaders("/portal", request, requestId)
+  }
+
   if (path.startsWith("/admin")) {
     const canAdminByPerm =
       payload.permissions?.includes("master.data.manage") ||

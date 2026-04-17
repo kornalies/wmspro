@@ -125,9 +125,9 @@ export function GateOutForm() {
             </div>
             {errors.do_number && <p className="text-sm text-red-600">{errors.do_number.message}</p>}
             {verified && (
-              <div className="flex items-center gap-2 rounded border border-green-200 bg-green-50 p-3">
+              <div className="flex items-center gap-2 rounded border border-green-200 bg-green-50 p-3 dark:border-green-900/60 dark:bg-green-950/30">
                 <CheckCircle className="h-4 w-4 text-green-600" />
-                <span className="text-sm text-green-800">DO verified and ready for dispatch</span>
+                <span className="text-sm text-green-800 dark:text-green-200">DO verified and ready for dispatch</span>
               </div>
             )}
           </div>
