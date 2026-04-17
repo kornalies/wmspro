@@ -1,6 +1,6 @@
 "use client"
 
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -22,7 +22,6 @@ type FormValues = z.infer<typeof schema>
 
 export default function LoginPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const loginMutation = useLogin()
 
   const {
@@ -41,7 +40,10 @@ export default function LoginPage() {
   const onSubmit = async (values: FormValues) => {
     try {
       const loginResult = await loginMutation.mutateAsync(values)
-      const nextParam = String(searchParams.get("next") || "")
+      const nextParam =
+        typeof window !== "undefined"
+          ? String(new URLSearchParams(window.location.search).get("next") || "")
+          : ""
       const user = loginResult?.data
       const role = String(user?.role || "").toUpperCase()
       const isPortalOnlyRole =
