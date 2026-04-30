@@ -6,6 +6,7 @@ import { createAuthSession } from "@/lib/auth-session-store"
 import { signToken } from "@/lib/auth"
 import { authenticateUser } from "@/lib/auth-service"
 import { query } from "@/lib/db"
+import { getEnabledProductsForCompany } from "@/lib/product-access"
 
 const mobileLoginSchema = z.object({
   company_code: z.string().trim().min(2, "Company code is required"),
@@ -116,6 +117,7 @@ export async function POST(request: NextRequest) {
       ipAddress: getRequestIpAddress(request),
       userAgent: request.headers.get("user-agent") || undefined,
     })
+    const products = await getEnabledProductsForCompany(user.company_id)
 
     const accessToken = await signToken(
       {
@@ -125,6 +127,7 @@ export async function POST(request: NextRequest) {
         role: user.role,
         roles: user.roles,
         permissions: user.permissions,
+        products,
         companyId: user.company_id,
         companyCode: user.company_code,
         warehouseId: user.warehouse_id ?? undefined,
@@ -141,6 +144,7 @@ export async function POST(request: NextRequest) {
         role: user.role,
         roles: user.roles,
         permissions: user.permissions,
+        products,
         companyId: user.company_id,
         companyCode: user.company_code,
         warehouseId: user.warehouse_id ?? undefined,
@@ -161,6 +165,7 @@ export async function POST(request: NextRequest) {
         role: user.role,
         roles: user.roles,
         permissions: user.permissions,
+        products,
         company_id: user.company_id,
         company_code: user.company_code,
         warehouse_id: assignedWarehouse ? Number(assignedWarehouse.id) : null,

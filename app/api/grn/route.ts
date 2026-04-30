@@ -8,6 +8,7 @@ import { ensureGrnManualSchema, ensureStockPutawaySchema } from "@/lib/db-bootst
 import { fail, ok, paginated } from "@/lib/api-response"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 type JsonRecord = Record<string, unknown>
 
@@ -441,6 +442,7 @@ export async function GET(request: NextRequest) {
     if (!session) {
       return fail("UNAUTHORIZED", "Unauthorized", 401)
     }
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "grn.manage")
     const policy = await getEffectivePolicy(
       session.companyId,
@@ -550,6 +552,8 @@ export async function GET(request: NextRequest) {
       totalPages: Math.ceil(total / limit),
     })
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     console.error("GRN list error:", error)
@@ -567,6 +571,7 @@ export async function POST(request: NextRequest) {
       return fail("UNAUTHORIZED", "Unauthorized", 401)
     }
 
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "grn.manage")
 
     const body = await request.json()
@@ -592,6 +597,8 @@ export async function POST(request: NextRequest) {
     return ok(created, "GRN created successfully")
   } catch (error: unknown) {
     await client.query("ROLLBACK")
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     console.error("GRN creation error:", error)
     const message = error instanceof Error ? error.message : "Failed to create GRN"
     return fail("VALIDATION_OR_CREATE_ERROR", message, 400)

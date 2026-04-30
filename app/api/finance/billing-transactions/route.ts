@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
 
     const status = request.nextUrl.searchParams.get("status")
     const clientId = Number(request.nextUrl.searchParams.get("client_id") || 0)
+    const warehouseId = Number(request.nextUrl.searchParams.get("warehouse_id") || 0)
     const chargeType = request.nextUrl.searchParams.get("charge_type")
     const dateFrom = request.nextUrl.searchParams.get("date_from")
     const dateTo = request.nextUrl.searchParams.get("date_to")
@@ -48,6 +49,10 @@ export async function GET(request: NextRequest) {
     if (clientId) {
       conditions.push(`bt.client_id = $${i++}`)
       params.push(clientId)
+    }
+    if (warehouseId) {
+      conditions.push(`bt.warehouse_id = $${i++}`)
+      params.push(warehouseId)
     }
     if (chargeType && chargeType !== "all") {
       conditions.push(`bt.charge_type = $${i++}`)

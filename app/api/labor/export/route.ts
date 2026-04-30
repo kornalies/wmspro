@@ -36,6 +36,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const mode = (searchParams.get("mode") || "exceptions").toLowerCase()
     const range = resolveDateRange(searchParams.get("from"), searchParams.get("to"))
+    const userId = Number(searchParams.get("user_id") || 0)
+    const shiftId = Number(searchParams.get("shift_id") || 0)
+    const warehouseId = Number(searchParams.get("warehouse_id") || 0)
 
     if (mode === "productivity") {
       const result = await query(
@@ -61,9 +64,12 @@ export async function GET(request: NextRequest) {
          LEFT JOIN labor_shifts sh ON sh.id = e.shift_id AND sh.company_id = e.company_id
          WHERE e.company_id = $1
            AND e.event_ts::date BETWEEN $2::date AND $3::date
+           AND ($4::int = 0 OR e.user_id = $4)
+           AND ($5::int = 0 OR e.shift_id = $5)
+           AND ($6::int = 0 OR COALESCE(e.warehouse_id, sh.warehouse_id) = $6)
          ORDER BY e.event_ts DESC
          LIMIT 5000`,
-        [access.companyId, range.from, range.to]
+        [access.companyId, range.from, range.to, userId, shiftId, warehouseId]
       )
 
       const headers = [
@@ -116,6 +122,9 @@ export async function GET(request: NextRequest) {
            LEFT JOIN labor_shifts sh ON sh.id = e.shift_id AND sh.company_id = e.company_id
            WHERE e.company_id = $1
              AND e.event_ts::date BETWEEN $2::date AND $3::date
+             AND ($4::int = 0 OR e.user_id = $4)
+             AND ($5::int = 0 OR e.shift_id = $5)
+             AND ($6::int = 0 OR COALESCE(e.warehouse_id, sh.warehouse_id) = $6)
          )
          SELECT
            id,
@@ -139,7 +148,7 @@ export async function GET(request: NextRequest) {
          FROM base
          ORDER BY severity DESC, performance_pct ASC, event_ts DESC
          LIMIT 5000`,
-        [access.companyId, range.from, range.to]
+        [access.companyId, range.from, range.to, userId, shiftId, warehouseId]
       )
 
       const headers = [

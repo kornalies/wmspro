@@ -33,10 +33,15 @@ export function useUpsertLaborStandard() {
   })
 }
 
-export function useLaborShifts(shiftDate: string) {
+export function useLaborShifts(shiftDate: string, warehouseId = "all") {
   return useQuery({
-    queryKey: ["labor", "shifts", shiftDate],
-    queryFn: async () => apiClient.get(`/labor/shifts?shift_date=${encodeURIComponent(shiftDate)}`),
+    queryKey: ["labor", "shifts", shiftDate, warehouseId],
+    queryFn: async () =>
+      apiClient.get(
+        `/labor/shifts?shift_date=${encodeURIComponent(shiftDate)}&warehouse_id=${encodeURIComponent(
+          warehouseId === "all" ? "0" : warehouseId
+        )}`
+      ),
   })
 }
 
@@ -74,11 +79,23 @@ export function useUpsertLaborAssignment() {
   })
 }
 
-export function useLaborProductivity(from: string, to: string) {
+export function useLaborProductivity(
+  from: string,
+  to: string,
+  filters?: { userId?: string; shiftId?: string; warehouseId?: string }
+) {
   return useQuery({
-    queryKey: ["labor", "productivity", from, to],
-    queryFn: async () =>
-      apiClient.get(`/labor/productivity?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    queryKey: ["labor", "productivity", from, to, filters?.userId, filters?.shiftId, filters?.warehouseId],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        from,
+        to,
+        user_id: filters?.userId && filters.userId !== "all" ? filters.userId : "0",
+        shift_id: filters?.shiftId && filters.shiftId !== "all" ? filters.shiftId : "0",
+        warehouse_id: filters?.warehouseId && filters.warehouseId !== "all" ? filters.warehouseId : "0",
+      })
+      return apiClient.get(`/labor/productivity?${params.toString()}`)
+    },
   })
 }
 
@@ -95,10 +112,22 @@ export function useCreateLaborProductivity() {
   })
 }
 
-export function useLaborExceptions(from: string, to: string) {
+export function useLaborExceptions(
+  from: string,
+  to: string,
+  filters?: { userId?: string; shiftId?: string; warehouseId?: string }
+) {
   return useQuery({
-    queryKey: ["labor", "exceptions", from, to],
-    queryFn: async () =>
-      apiClient.get(`/labor/exceptions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    queryKey: ["labor", "exceptions", from, to, filters?.userId, filters?.shiftId, filters?.warehouseId],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        from,
+        to,
+        user_id: filters?.userId && filters.userId !== "all" ? filters.userId : "0",
+        shift_id: filters?.shiftId && filters.shiftId !== "all" ? filters.shiftId : "0",
+        warehouse_id: filters?.warehouseId && filters.warehouseId !== "all" ? filters.warehouseId : "0",
+      })
+      return apiClient.get(`/labor/exceptions?${params.toString()}`)
+    },
   })
 }

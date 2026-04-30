@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
     const to = searchParams.get("to")
     const userId = Number(searchParams.get("user_id") || 0)
     const shiftId = Number(searchParams.get("shift_id") || 0)
+    const warehouseId = Number(searchParams.get("warehouse_id") || 0)
 
     const result = await query(
       `SELECT
@@ -64,9 +65,10 @@ export async function GET(request: NextRequest) {
          AND ($3::timestamptz IS NULL OR e.event_ts <= $3::timestamptz)
          AND ($4::int = 0 OR e.user_id = $4)
          AND ($5::int = 0 OR e.shift_id = $5)
+         AND ($6::int = 0 OR COALESCE(e.warehouse_id, sh.warehouse_id) = $6)
        ORDER BY e.event_ts DESC
        LIMIT 500`,
-      [access.companyId, from || null, to || null, userId, shiftId]
+      [access.companyId, from || null, to || null, userId, shiftId, warehouseId]
     )
 
     return ok(result.rows)

@@ -6,8 +6,8 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "WMS Pro",
-  description: "Warehouse Management System",
+  title: "GWU WMS | GWU Tech",
+  description: "GWU Tech supply chain operating system for warehouse execution, 3PL billing, and client portal workflows.",
 };
 
 export default function RootLayout({

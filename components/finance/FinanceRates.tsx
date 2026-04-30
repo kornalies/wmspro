@@ -2,11 +2,23 @@
 
 import { useMemo, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { Edit, Plus, Trash2 } from "lucide-react"
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  Edit,
+  Filter,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
 import { handleError } from "@/lib/error-handler"
+import { downloadFile } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +26,8 @@ import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -157,6 +171,44 @@ function blankForm(clientId?: number): FormState {
   }
 }
 
+function dateOnly(value?: string | null) {
+  return value?.slice(0, 10) || ""
+}
+
+function getRateStatus(row: RateCard) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const effectiveFrom = new Date(row.effective_from)
+  effectiveFrom.setHours(0, 0, 0, 0)
+  const effectiveTo = row.effective_to ? new Date(row.effective_to) : null
+  effectiveTo?.setHours(0, 0, 0, 0)
+
+  if (!row.is_active) return "INACTIVE"
+  if (effectiveFrom > today) return "SCHEDULED"
+  if (effectiveTo && effectiveTo < today) return "EXPIRED"
+  return "ACTIVE"
+}
+
+function isExpiringSoon(row: RateCard) {
+  if (!row.effective_to || getRateStatus(row) !== "ACTIVE") return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const effectiveTo = new Date(row.effective_to)
+  effectiveTo.setHours(0, 0, 0, 0)
+  const days = Math.ceil((effectiveTo.getTime() - today.getTime()) / 86_400_000)
+  return days >= 0 && days <= 30
+}
+
+function calcMethodsLabel(details: RateDetail[]) {
+  const methods = Array.from(new Set(details.map((d) => d.calc_method).filter(Boolean)))
+  return methods.length ? methods.join(", ") : "Not set"
+}
+
+function escapeCsv(value: string | number | null | undefined) {
+  const text = String(value ?? "")
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
 export function FinanceRates() {
   const clientsQuery = useQuery({
     queryKey: ["clients", "active", "rates"],
@@ -182,23 +234,56 @@ export function FinanceRates() {
     },
   })
 
-  const clients = clientsQuery.data ?? []
-  const items = itemsQuery.data ?? []
-  const rates = ratesQuery.data ?? []
+  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data])
+  const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data])
+  const rates = useMemo(() => ratesQuery.data ?? [], [ratesQuery.data])
   const [search, setSearch] = useState("")
+  const [clientFilter, setClientFilter] = useState("all")
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [methodFilter, setMethodFilter] = useState("all")
+  const [page, setPage] = useState(1)
+  const [rowsPerPage, setRowsPerPage] = useState(10)
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<FormState>(blankForm())
+  const [deleteTarget, setDeleteTarget] = useState<RateCard | null>(null)
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
-    if (!term) return rates
     return rates.filter(
-      (x) =>
+      (x) => {
+        const matchesSearch =
+          !term ||
         x.client_name.toLowerCase().includes(term) ||
         x.rate_card_code.toLowerCase().includes(term) ||
         x.rate_card_name.toLowerCase().includes(term)
+        const matchesClient = clientFilter === "all" || String(x.client_id) === clientFilter
+        const matchesStatus = statusFilter === "all" || getRateStatus(x) === statusFilter
+        const matchesMethod = methodFilter === "all" || x.details?.some((d) => d.calc_method === methodFilter)
+        return matchesSearch && matchesClient && matchesStatus && matchesMethod
+      }
     )
-  }, [rates, search])
+  }, [rates, search, clientFilter, statusFilter, methodFilter])
+
+  const metrics = useMemo(() => {
+    const active = rates.filter((row) => getRateStatus(row) === "ACTIVE").length
+    const scheduled = rates.filter((row) => getRateStatus(row) === "SCHEDULED").length
+    const expiring = rates.filter(isExpiringSoon).length
+    const clientsCovered = new Set(rates.map((row) => row.client_id)).size
+
+    return [
+      { label: "Total Rate Cards", value: rates.length, tone: "text-gray-900" },
+      { label: "Active", value: active, tone: "text-emerald-700" },
+      { label: "Scheduled", value: scheduled, tone: "text-blue-700" },
+      { label: "Expiring Soon", value: expiring, tone: "text-amber-700" },
+      { label: "Clients Covered", value: clientsCovered, tone: "text-gray-900" },
+    ]
+  }, [rates])
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / rowsPerPage))
+  const currentPage = Math.min(page, pageCount)
+  const pagedRates = filtered.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
+  const showingFrom = filtered.length ? (currentPage - 1) * rowsPerPage + 1 : 0
+  const showingTo = Math.min(currentPage * rowsPerPage, filtered.length)
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -252,6 +337,7 @@ export function FinanceRates() {
     mutationFn: async (id: number) => apiClient.delete(`/finance/rates?id=${id}`),
     onSuccess: () => {
       toast.success("Rate card deactivated")
+      setDeleteTarget(null)
       ratesQuery.refetch()
     },
     onError: (error) => handleError(error, "Failed to deactivate rate card"),
@@ -259,6 +345,40 @@ export function FinanceRates() {
 
   const openCreate = () => {
     setForm(blankForm(clients[0]?.id))
+    setOpen(true)
+  }
+
+  const duplicateRateCard = (row: RateCard) => {
+    setForm({
+      id: undefined,
+      client_id: String(row.client_id),
+      rate_card_code: `${row.rate_card_code}_COPY`,
+      rate_card_name: `${row.rate_card_name} Copy`,
+      effective_from: new Date().toISOString().slice(0, 10),
+      effective_to: "",
+      billing_cycle: row.billing_cycle || "MONTHLY",
+      currency: row.currency || "INR",
+      priority: String(row.priority ?? 100),
+      is_active: false,
+      notes: "",
+      details:
+        row.details?.map((d) => ({
+          charge_type: d.charge_type,
+          calc_method: d.calc_method || "PER_UNIT",
+          slab_mode: d.slab_mode || "ABSOLUTE",
+          item_id: d.item_id == null ? "" : String(d.item_id),
+          uom: d.uom || "UNIT",
+          min_qty: d.min_qty == null ? "" : String(d.min_qty),
+          max_qty: d.max_qty == null ? "" : String(d.max_qty),
+          free_qty: String(d.free_qty ?? 0),
+          unit_rate: String(d.unit_rate ?? 0),
+          min_charge: String(d.min_charge ?? 0),
+          max_charge: d.max_charge == null ? "" : String(d.max_charge),
+          tax_code: d.tax_code || "GST",
+          gst_rate: String(d.gst_rate ?? 18),
+          is_active: d.is_active ?? true,
+        })) ?? [blankDetail()],
+    })
     setOpen(true)
   }
 
@@ -297,62 +417,198 @@ export function FinanceRates() {
     setOpen(true)
   }
 
+  const exportRates = () => {
+    const headers = ["Code", "Name", "Client", "Status", "Effective From", "Effective To", "Billing Cycle", "Currency", "Rate Types", "Charge Lines"]
+    const rows = filtered.map((row) => [
+      row.rate_card_code,
+      row.rate_card_name,
+      row.client_name,
+      getRateStatus(row),
+      dateOnly(row.effective_from),
+      dateOnly(row.effective_to) || "Open",
+      row.billing_cycle,
+      row.currency,
+      calcMethodsLabel(row.details ?? []),
+      row.details?.length || 0,
+    ])
+    const csv = [headers, ...rows].map((line) => line.map(escapeCsv).join(",")).join("\n")
+    downloadFile(new Blob([csv], { type: "text/csv;charset=utf-8" }), "rate-cards.csv")
+  }
+
+  const statusBadge = (row: RateCard) => {
+    const status = getRateStatus(row)
+    const className =
+      status === "ACTIVE"
+        ? "bg-green-100 text-green-800"
+        : status === "SCHEDULED"
+          ? "bg-blue-100 text-blue-800"
+          : status === "EXPIRED"
+            ? "bg-amber-100 text-amber-800"
+            : "bg-gray-100 text-gray-700"
+
+    return <Badge className={className}>{status}</Badge>
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Rate Cards</h1>
           <p className="mt-1 text-gray-500">Contract rate engine setup for FLAT, PER_UNIT, SLAB, and PERCENT</p>
         </div>
-        <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Rate Card
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={exportRates} disabled={filtered.length === 0}>
+            <Download className="h-4 w-4" />
+            Export
+          </Button>
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Add Rate Card
+          </Button>
+        </div>
       </div>
 
-      <div className="max-w-md">
-        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by code/name/client" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="rounded-md border bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{metric.label}</p>
+            <p className={`mt-2 text-2xl font-semibold ${metric.tone}`}>{metric.value}</p>
+          </div>
+        ))}
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="relative w-full xl:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+            <Input
+              className="pl-9"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setPage(1)
+              }}
+              placeholder="Search rate cards by code, name, or client"
+            />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:flex">
+            <Select
+              value={clientFilter}
+              onValueChange={(value) => {
+                setClientFilter(value)
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="w-full xl:w-48">
+                <SelectValue placeholder="Client" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All clients</SelectItem>
+                {clients.map((client) => (
+                  <SelectItem key={client.id} value={String(client.id)}>
+                    {client.client_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={statusFilter}
+              onValueChange={(value) => {
+                setStatusFilter(value)
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="w-full xl:w-40">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="ACTIVE">Active</SelectItem>
+                <SelectItem value="SCHEDULED">Scheduled</SelectItem>
+                <SelectItem value="EXPIRED">Expired</SelectItem>
+                <SelectItem value="INACTIVE">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={methodFilter}
+              onValueChange={(value) => {
+                setMethodFilter(value)
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="w-full xl:w-40">
+                <SelectValue placeholder="Rate type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All rate types</SelectItem>
+                <SelectItem value="FLAT">FLAT</SelectItem>
+                <SelectItem value="PER_UNIT">PER_UNIT</SelectItem>
+                <SelectItem value="SLAB">SLAB</SelectItem>
+                <SelectItem value="PERCENT">PERCENT</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSearch("")
+                setClientFilter("all")
+                setStatusFilter("all")
+                setMethodFilter("all")
+                setPage(1)
+              }}
+            >
+              <Filter className="h-4 w-4" />
+              Reset
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-md border bg-white shadow-sm">
         <Table>
           <TableHeader>
             <TableRow className="bg-gray-50">
               <TableHead>Code</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Client</TableHead>
+              <TableHead>Rate Type</TableHead>
               <TableHead>Effective</TableHead>
-              <TableHead>Details</TableHead>
+              <TableHead>Charge Lines</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((row) => (
-              <TableRow key={row.id}>
+            {pagedRates.map((row) => (
+              <TableRow key={row.id} className="hover:bg-gray-50/80">
                 <TableCell className="font-mono">{row.rate_card_code}</TableCell>
-                <TableCell>{row.rate_card_name}</TableCell>
-                <TableCell>{row.client_name}</TableCell>
-                <TableCell className="text-xs">
-                  {row.effective_from?.slice(0, 10)} to {row.effective_to?.slice(0, 10) || "Open"}
-                </TableCell>
-                <TableCell>{row.details?.length || 0}</TableCell>
                 <TableCell>
-                  <Badge className={row.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}>
-                    {row.is_active ? "ACTIVE" : "INACTIVE"}
-                  </Badge>
+                  <div className="font-medium text-gray-900">{row.rate_card_name}</div>
+                  <div className="text-xs text-gray-500">{row.billing_cycle} billing - {row.currency}</div>
                 </TableCell>
+                <TableCell>{row.client_name}</TableCell>
+                <TableCell className="text-xs">{calcMethodsLabel(row.details ?? [])}</TableCell>
+                <TableCell className="text-xs">
+                  <div>{dateOnly(row.effective_from)} to {dateOnly(row.effective_to) || "Open"}</div>
+                  {isExpiringSoon(row) ? <div className="mt-1 text-amber-700">Expires within 30 days</div> : null}
+                </TableCell>
+                <TableCell>{row.details?.length || 0} charge lines</TableCell>
+                <TableCell>{statusBadge(row)}</TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(row)}>
+                    <Button variant="ghost" size="icon-sm" onClick={() => duplicateRateCard(row)} title="Duplicate rate card">
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => openEdit(row)} title="Edit rate card">
                       <Edit className="h-4 w-4" />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon-sm"
                       className="text-red-600"
-                      onClick={() => deactivateMutation.mutate(row.id)}
+                      onClick={() => setDeleteTarget(row)}
                       disabled={deactivateMutation.isPending}
+                      title="Deactivate rate card"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -362,13 +618,43 @@ export function FinanceRates() {
             ))}
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-sm text-gray-500">
-                  No rate cards found.
+                <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
+                  {ratesQuery.isLoading ? "Loading rate cards..." : "No rate cards match the current filters."}
                 </TableCell>
               </TableRow>
             ) : null}
           </TableBody>
         </Table>
+        <div className="flex flex-col gap-3 border-t px-4 py-3 text-sm text-gray-600 md:flex-row md:items-center md:justify-between">
+          <div>
+            Showing {showingFrom}-{showingTo} of {filtered.length} rate cards
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={String(rowsPerPage)}
+              onValueChange={(value) => {
+                setRowsPerPage(Number(value))
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="h-8 w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10 rows</SelectItem>
+                <SelectItem value="25">25 rows</SelectItem>
+                <SelectItem value="50">50 rows</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="icon-sm" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="min-w-20 text-center">Page {currentPage} of {pageCount}</span>
+            <Button variant="outline" size="icon-sm" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -584,6 +870,36 @@ export function FinanceRates() {
               {saveMutation.isPending ? "Saving..." : form.id ? "Update Rate Card" : "Create Rate Card"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(value) => !value && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <DialogTitle>Deactivate Rate Card</DialogTitle>
+            <DialogDescription>
+              This will deactivate {deleteTarget?.rate_card_name} and can affect billing runs that rely on this rate card.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border bg-gray-50 p-3 text-sm">
+            <div className="font-mono text-gray-900">{deleteTarget?.rate_card_code}</div>
+            <div className="mt-1 text-gray-600">{deleteTarget?.client_name}</div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!deleteTarget || deactivateMutation.isPending}
+              onClick={() => deleteTarget && deactivateMutation.mutate(deleteTarget.id)}
+            >
+              {deactivateMutation.isPending ? "Deactivating..." : "Deactivate"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

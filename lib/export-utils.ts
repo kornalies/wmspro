@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// PDF and Excel Export Utilities for WMS Pro
+// PDF and Excel Export Utilities for GWU WMS
 // Install: npm install jspdf jspdf-autotable xlsx
 
 import jsPDF from 'jspdf'
@@ -193,6 +193,9 @@ export const exportInvoicePDF = (invoice: any) => {
     const igst = Number(invoice.igst_amount ?? 0)
     const totalTax = Number(invoice.total_tax_amount ?? (cgst + sgst + igst))
     const grandTotal = Number(invoice.grand_total ?? (taxable + totalTax))
+    const creditNoteTotal = Number(invoice.credit_note_total ?? invoice.reversal_credit_total ?? 0)
+    const netPayable = Math.max(grandTotal - creditNoteTotal, 0)
+    const balanceDue = invoice.balance === null || invoice.balance === undefined ? netPayable : Number(invoice.balance)
     const gstRate = Number(invoice.gst_rate ?? 18)
     const supplyType = text(invoice.supply_type, cgst + sgst > 0 ? 'INTRA_STATE' : 'INTER_STATE')
 
@@ -202,7 +205,7 @@ export const exportInvoicePDF = (invoice: any) => {
     doc.setFontSize(18)
     doc.text('TAX INVOICE', 14, 18)
     doc.setFontSize(10)
-    doc.text(text(invoice.supplier_name, 'WMS Pro'), pageWidth - 14, 12, { align: 'right' })
+    doc.text(text(invoice.supplier_name, 'GWU WMS'), pageWidth - 14, 12, { align: 'right' })
     doc.text('Warehouse Management Solutions', pageWidth - 14, 18, { align: 'right' })
     doc.text('Chennai, Tamil Nadu', pageWidth - 14, 24, { align: 'right' })
     doc.setTextColor(0, 0, 0)
@@ -214,7 +217,7 @@ export const exportInvoicePDF = (invoice: any) => {
     doc.setFont('helvetica', 'bold')
     doc.text('Supplier Details', 17, 40)
     doc.setFont('helvetica', 'normal')
-    doc.text(text(invoice.supplier_name, 'WMS Pro'), 17, 46)
+    doc.text(text(invoice.supplier_name, 'GWU WMS'), 17, 46)
     doc.text(`GSTIN: ${text(invoice.supplier_gstin)}`, 17, 52)
     doc.text(
         `State: ${text(invoice.supplier_state, 'Tamil Nadu')}${text(invoice.supplier_state_code) !== '-' ? ` (${text(invoice.supplier_state_code)})` : ''}`,
@@ -275,7 +278,7 @@ export const exportInvoicePDF = (invoice: any) => {
 
     const finalY = (doc as any).lastAutoTable?.finalY || 110
     const summaryY = finalY + 8
-    doc.rect(120, summaryY, 76, 40)
+    doc.rect(120, summaryY, 76, 52)
     doc.setFont('helvetica', 'normal')
     doc.text('Taxable Amount:', 124, summaryY + 8)
     doc.text(amount(taxable), 192, summaryY + 8, { align: 'right' })
@@ -288,23 +291,34 @@ export const exportInvoicePDF = (invoice: any) => {
     doc.setFont('helvetica', 'bold')
     doc.text('Grand Total:', 124, summaryY + 34)
     doc.text(amount(grandTotal), 192, summaryY + 34, { align: 'right' })
+    if (creditNoteTotal > 0) {
+        doc.setFont('helvetica', 'normal')
+        doc.text('Credit Notes:', 124, summaryY + 40)
+        doc.text(`- ${amount(creditNoteTotal)}`, 192, summaryY + 40, { align: 'right' })
+        doc.setFont('helvetica', 'bold')
+        doc.text('Net Payable:', 124, summaryY + 48)
+        doc.text(amount(netPayable), 192, summaryY + 48, { align: 'right' })
+    }
 
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     doc.text(`Total Tax: ${amount(totalTax)}`, 14, summaryY + 8)
-    doc.text(`Balance Due: ${amount(invoice.balance || 0)}`, 14, summaryY + 14)
-    doc.text('Bank Details: To be configured', 14, summaryY + 20)
-    doc.text('This is a system generated invoice.', 14, summaryY + 26)
-    doc.text('Authorized Signatory', 14, summaryY + 36)
+    doc.text(`Credit Notes: ${amount(creditNoteTotal)}`, 14, summaryY + 14)
+    doc.text(`Balance Due: ${amount(balanceDue)}`, 14, summaryY + 20)
+    doc.text('Bank Details: To be configured', 14, summaryY + 26)
+    doc.text('This is a system generated invoice.', 14, summaryY + 32)
+    doc.text('Authorized Signatory', 14, summaryY + 44)
 
-    const paid = String(invoice.status || '').toUpperCase() === 'PAID'
-    if (paid) {
+    const status = String(invoice.status || '').toUpperCase()
+    if (status === 'PAID') {
         doc.setTextColor(22, 163, 74)
+    } else if (status === 'REVERSED') {
+        doc.setTextColor(220, 38, 38)
     } else {
         doc.setTextColor(217, 119, 6)
     }
-    const statusText = `STATUS: ${text(invoice.status).toUpperCase()}`
-    const statusY = summaryY + 47
+    const statusText = `STATUS: ${status || text(invoice.status).toUpperCase()}`
+    const statusY = summaryY + 59
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(10)
     doc.text(statusText, pageWidth - 14, statusY, { align: 'right' })
@@ -415,6 +429,226 @@ export const exportStockToExcel = (stockData: Array<any>) => {
     ws['!cols'] = maxWidth.map((w: number) => ({ width: w + 2 }))
 
     XLSX.writeFile(wb, `Stock-Report-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportItemsToExcel = (items: Array<any>) => {
+    const data = items.map((item) => ({
+        'Item Code': item.item_code,
+        'Item Name': item.item_name,
+        'Category ID': item.category_id,
+        'HSN Code': item.hsn_code,
+        'UOM': item.uom,
+        'Standard MRP': item.standard_mrp,
+        'Min Stock Alert': item.min_stock_alert,
+        'Status': item.is_active ? 'Active' : 'Inactive',
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Items')
+    const maxWidth = data.reduce((w: number[], r: any) => {
+        return Object.keys(r).map((key, i) => Math.max(w[i] || 10, key.length, String(r[key] ?? '').length))
+    }, [])
+    ws['!cols'] = maxWidth.map((w: number) => ({ width: Math.min(w + 2, 42) }))
+    XLSX.writeFile(wb, `Items-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportItemTemplateToExcel = () => {
+    const data = [{
+        'Item Code': 'ITEM-001',
+        'Item Name': 'Example Item',
+        'Category ID': '',
+        'HSN Code': '000000',
+        'UOM': 'PCS',
+        'Standard MRP': 100,
+        'Min Stock Alert': 10,
+        'Status': 'Active',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Item Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'Item-Import-Template.xlsx')
+}
+
+export const exportContractsToExcel = (contracts: Array<any>) => {
+    const data = contracts.map((contract) => ({
+        'Contract Code': contract.contract_code,
+        'Client Code': contract.client_code,
+        'Client Name': contract.client_name,
+        'Effective From': contract.effective_from ? String(contract.effective_from).slice(0, 10) : '',
+        'Effective To': contract.effective_to ? String(contract.effective_to).slice(0, 10) : '',
+        'Storage Rate': contract.storage_rate_per_unit,
+        'Handling Rate': contract.handling_rate_per_unit,
+        'Minimum Guarantee': contract.minimum_guarantee_amount,
+        'Billing Cycle': contract.billing_cycle,
+        'Currency': contract.currency,
+        'Health': contract.health_label,
+        'Status': contract.is_active ? 'Active' : 'Inactive',
+        'Notes': contract.notes,
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Contracts')
+    const maxWidth = data.reduce((w: number[], r: any) => {
+        return Object.keys(r).map((key, i) => Math.max(w[i] || 10, key.length, String(r[key] ?? '').length))
+    }, [])
+    ws['!cols'] = maxWidth.map((w: number) => ({ width: Math.min(w + 2, 44) }))
+    XLSX.writeFile(wb, `Contracts-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportContractTemplateToExcel = () => {
+    const data = [{
+        'Client ID': 1,
+        'Contract Code': 'CON-001',
+        'Effective From': new Date().toISOString().slice(0, 10),
+        'Effective To': '',
+        'Storage Rate': 5,
+        'Handling Rate': 10,
+        'Minimum Guarantee': 0,
+        'Billing Cycle': 'MONTHLY',
+        'Currency': 'INR',
+        'Status': 'Active',
+        'Notes': 'Example contract',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Contract Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'Contract-Import-Template.xlsx')
+}
+
+export const exportWarehousesToExcel = (warehouses: Array<any>) => {
+    const data = warehouses.map((warehouse) => ({
+        'Warehouse Code': warehouse.warehouse_code,
+        'Warehouse Name': warehouse.warehouse_name,
+        'City': warehouse.city,
+        'State': warehouse.state,
+        'Pincode': warehouse.pincode,
+        'Latitude': warehouse.latitude,
+        'Longitude': warehouse.longitude,
+        'Type': warehouse.warehouse_type,
+        'Region': warehouse.region_tag,
+        'Manager': warehouse.manager_name,
+        'Zones': warehouse.total_zones,
+        'Active SKUs': warehouse.active_skus,
+        'Open GRNs': warehouse.open_grns,
+        'Stock Value': warehouse.stock_value,
+        'Capacity Used': warehouse.capacity_used_units,
+        'Capacity Total': warehouse.capacity_total_units,
+        'Status': warehouse.is_active ? 'Active' : 'Inactive',
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Warehouses')
+    const maxWidth = data.reduce((w: number[], r: any) => {
+        return Object.keys(r).map((key, i) => Math.max(w[i] || 10, key.length, String(r[key] ?? '').length))
+    }, [])
+    ws['!cols'] = maxWidth.map((w: number) => ({ width: Math.min(w + 2, 42) }))
+    XLSX.writeFile(wb, `Warehouses-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportWarehouseTemplateToExcel = () => {
+    const data = [{
+        'Warehouse Code': 'WH-001',
+        'Warehouse Name': 'Main Warehouse',
+        'City': 'Chennai',
+        'State': 'Tamil Nadu',
+        'Pincode': '600001',
+        'Latitude': 13.0827,
+        'Longitude': 80.2707,
+        'Status': 'Active',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Warehouse Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'Warehouse-Import-Template.xlsx')
+}
+
+export const exportZoneLayoutsToExcel = (layouts: Array<any>) => {
+    const data = layouts.map((layout) => ({
+        'Warehouse': layout.warehouse_name,
+        'Zone Code': layout.zone_code,
+        'Zone Name': layout.zone_name,
+        'Rack Code': layout.rack_code,
+        'Rack Name': layout.rack_name,
+        'Bin Code': layout.bin_code,
+        'Bin Name': layout.bin_name,
+        'Capacity Units': layout.capacity_units,
+        'Current Stock': layout.stock_count || 0,
+        'Utilization %': layout.capacity_units ? Math.round(((layout.stock_count || 0) / layout.capacity_units) * 100) : '',
+        'Sort Order': layout.sort_order,
+        'Status': layout.is_active ? 'Active' : 'Inactive',
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Zone Layouts')
+    const maxWidth = data.reduce((w: number[], r: any) => {
+        return Object.keys(r).map((key, i) => Math.max(w[i] || 10, key.length, String(r[key] ?? '').length))
+    }, [])
+    ws['!cols'] = maxWidth.map((w: number) => ({ width: Math.min(w + 2, 42) }))
+    XLSX.writeFile(wb, `Zone-Layouts-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportZoneLayoutTemplateToExcel = () => {
+    const data = [{
+        'Warehouse Name': 'Main Warehouse',
+        'Zone Code': 'ZONE-A',
+        'Zone Name': 'Fast Moving',
+        'Rack Code': 'RACK-01',
+        'Rack Name': 'Rack 01',
+        'Bin Code': 'BIN-001',
+        'Bin Name': 'Bin 001',
+        'Capacity Units': 100,
+        'Sort Order': 0,
+        'Status': 'Active',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Zone Layout Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'Zone-Layout-Import-Template.xlsx')
+}
+
+/**
+ * Export Stock Movement Log to Excel
+ */
+export const exportStockMovementsToExcel = (movementData: Array<any>) => {
+    const data = movementData.map((movement) => ({
+        'Movement Ref': movement.movement_ref,
+        'Moved At': movement.moved_at,
+        'Serial Number': movement.serial_number,
+        'Item Code': movement.item_code,
+        'Item Name': movement.item_name,
+        'Client': movement.client_name,
+        'Warehouse': movement.warehouse_name,
+        'From Bin': movement.from_bin_location,
+        'To Bin': movement.to_bin_location,
+        'User': movement.moved_by_name || movement.moved_by_username,
+        'Username': movement.moved_by_username,
+        'Role': movement.moved_by_role,
+        'Source': movement.movement_source,
+        'Remarks': movement.remarks,
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Movements')
+
+    const maxWidth = data.reduce((w: number[], r: any) => {
+        return Object.keys(r).map((key, i) => Math.max(w[i] || 10, key.length, String(r[key] ?? '').length))
+    }, [])
+    ws['!cols'] = maxWidth.map((w: number) => ({ width: Math.min(w + 2, 48) }))
+
+    XLSX.writeFile(wb, `Stock-Movements-${new Date().toISOString().split('T')[0]}.xlsx`)
 }
 
 /**
@@ -564,13 +798,15 @@ export const exportGateInToExcel = (gateInRows: Array<any>) => {
  */
 export const exportUsersToExcel = (users: Array<any>) => {
     const data = users.map(user => ({
-        'User ID': user.user_code,
         'Full Name': user.full_name,
+        'Username': user.username,
         'Email': user.email,
         'Role': user.role,
-        'Assigned Warehouse': user.warehouse_name || 'All Warehouses',
-        'Status': user.status,
-        'Created Date': user.created_at
+        'Assigned Warehouse': user.warehouse_name || 'Unassigned',
+        'Status': user.is_active ? 'Active' : 'Inactive',
+        'Invite Status': user.invite_status || 'Not Invited',
+        'Last Login': user.last_login || 'Not available',
+        'Created Date': user.created_at,
     }))
 
     const ws = XLSX.utils.json_to_sheet(data)
@@ -580,21 +816,46 @@ export const exportUsersToExcel = (users: Array<any>) => {
     XLSX.writeFile(wb, `Users-${new Date().toISOString().split('T')[0]}.xlsx`)
 }
 
+export const exportUserTemplateToExcel = () => {
+    const data = [{
+        'Full Name': 'Example User',
+        'Username': 'example.user',
+        'Email': 'example.user@example.com',
+        'Role': 'OPERATOR',
+        'Warehouse': 'Main Warehouse',
+        'Password': 'ChangeMe123',
+        'Status': 'Active',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'User Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'User-Import-Template.xlsx')
+}
+
 /**
  * Export Clients to Excel
  */
 export const exportClientsToExcel = (clients: Array<any>) => {
     const data = clients.map(client => ({
         'Client Code': client.client_code,
-        'Company Name': client.company_name,
+        'Client Name': client.client_name,
         'Contact Person': client.contact_person,
-        'Email': client.email,
-        'Phone': client.phone,
+        'Email': client.contact_email,
+        'Phone': client.contact_phone,
         'City': client.city,
         'State': client.state,
         'GST Number': client.gst_number,
-        'Rate Card': client.rate_card_type,
-        'Status': client.status
+        'PAN Number': client.pan_number,
+        'Contract Code': client.contract_code,
+        'Billing Terms': client.billing_terms,
+        'Contract From': client.effective_from,
+        'Contract To': client.effective_to,
+        'Storage Rate': client.storage_rate_per_unit,
+        'Handling Rate': client.handling_rate_per_unit,
+        'Minimum Guarantee': client.minimum_guarantee_amount,
+        'Status': client.is_active ? 'Active' : 'Inactive',
     }))
 
     const ws = XLSX.utils.json_to_sheet(data)
@@ -602,6 +863,28 @@ export const exportClientsToExcel = (clients: Array<any>) => {
     XLSX.utils.book_append_sheet(wb, ws, 'Clients')
 
     XLSX.writeFile(wb, `Clients-${new Date().toISOString().split('T')[0]}.xlsx`)
+}
+
+export const exportClientTemplateToExcel = () => {
+    const data = [{
+        'Client Code': 'CLIENT-001',
+        'Client Name': 'Example Client Pvt. Ltd.',
+        'Contact Person': 'Contact Name',
+        'Email': 'contact@example.com',
+        'Phone': '+91 98765 43210',
+        'Address': 'Registered address',
+        'City': 'Mumbai',
+        'State': 'Maharashtra',
+        'Pincode': '400001',
+        'GST Number': '27ABCDE1234F1Z5',
+        'PAN Number': 'ABCDE1234F',
+    }]
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Client Import Template')
+    ws['!cols'] = Object.keys(data[0]).map((key) => ({ width: Math.max(18, key.length + 2) }))
+    XLSX.writeFile(wb, 'Client-Import-Template.xlsx')
 }
 
 

@@ -1,4 +1,5 @@
 import { TokenPayload } from "@/lib/auth"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 import { canAccessClient, hasExplicitPortalPermissions, resolvePortalFeaturePermissions } from "@/lib/portal"
 import { getUserAccessProfile } from "@/lib/rbac"
 
@@ -6,6 +7,7 @@ export async function parseAndAuthorizeClientId(
   session: TokenPayload,
   rawClientId: string | null
 ): Promise<{ ok: true; clientId: number } | { ok: false; code: string; message: string; status: number }> {
+  await assertProductEnabled(session.companyId, "WMS")
   const clientId = Number(rawClientId)
   if (!clientId) {
     return { ok: false, code: "VALIDATION_ERROR", message: "client_id is required", status: 400 }
@@ -18,6 +20,7 @@ export async function parseAndAuthorizeClientId(
 }
 
 export async function getPortalPermissions(session: TokenPayload) {
+  await assertProductEnabled(session.companyId, "WMS")
   const access = await getUserAccessProfile(session.userId, session.role)
   return access.permissions
 }
@@ -29,6 +32,7 @@ export async function hasPortalPermission(session: TokenPayload, permission: str
 }
 
 export async function hasPortalFeaturePermission(session: TokenPayload, featureKey: string) {
+  await assertProductEnabled(session.companyId, "WMS")
   if (session.role === "SUPER_ADMIN" || session.role === "ADMIN") return true
   const hasExplicit = await hasExplicitPortalPermissions(session)
   if (!hasExplicit) {
@@ -37,3 +41,5 @@ export async function hasPortalFeaturePermission(session: TokenPayload, featureK
   const allowed = await resolvePortalFeaturePermissions(session)
   return allowed.includes(featureKey)
 }
+
+export { guardProductError as guardPortalProductError }

@@ -36,6 +36,7 @@ deploy/keys/
 *.log
 tmp_*.log
 .codex-*.log
+artifacts/*.tar.gz
 
 # vercel
 .vercel

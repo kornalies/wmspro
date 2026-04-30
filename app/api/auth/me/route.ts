@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
+import { resolveSessionProducts } from "@/lib/product-access"
 import { getUserAccessProfile } from "@/lib/rbac"
 
 export async function GET() {
@@ -24,12 +25,14 @@ export async function GET() {
     }
 
     const access = await getUserAccessProfile(session.userId, session.role)
+    const products = await resolveSessionProducts(session)
 
     return ok({
       ...result.rows[0],
       role: access.primaryRole,
       roles: access.roles,
       permissions: access.permissions,
+      products,
     })
   } catch {
     return fail("SERVER_ERROR", "Failed to get user", 500)

@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { ArrowLeft, Camera, FileText } from "lucide-react"
 
 import { GRNForm } from "@/components/grn/GRNForm"
@@ -22,7 +23,11 @@ type OcrData = {
 } | null
 
 export default function NewGRNPage() {
-  const [mode, setMode] = useState<"choice" | "scan" | "manual">("choice")
+  const searchParams = useSearchParams()
+  const initialMode = searchParams.get("mode")
+  const [mode, setMode] = useState<"choice" | "scan" | "manual">(
+    initialMode === "scan" || initialMode === "manual" ? initialMode : "choice"
+  )
   const [ocrData, setOcrData] = useState<OcrData>(null)
 
   const handleDataExtracted = (data: OcrData) => {

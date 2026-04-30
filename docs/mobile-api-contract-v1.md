@@ -1,6 +1,8 @@
 # WMS Pro Mobile API Contract (v1)
 
 This document defines the mobile API contract that is currently implemented in this repository.
+For the standalone Flutter app in `wms_mobile`, the canonical production auth authority is the dedicated
+`wms-mobile-api` service (`/api/v1/mobile/auth/*`) to avoid split session/token domains.
 
 ## Base
 - Base URL: `/api/mobile/*`

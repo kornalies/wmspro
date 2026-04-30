@@ -4,6 +4,7 @@ import { z } from "zod"
 import { getSession, signToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
+import { getEnabledProductsForCompany } from "@/lib/product-access"
 
 const switchSchema = z.object({
   company_id: z.number().positive(),
@@ -28,6 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     const targetCompany = companyResult.rows[0]
+    const products = await getEnabledProductsForCompany(Number(targetCompany.id))
     const token = await signToken({
       sessionId: session.sessionId,
       userId: session.userId,
@@ -35,6 +37,7 @@ export async function POST(request: NextRequest) {
       role: session.role,
       roles: session.roles,
       permissions: session.permissions,
+      products,
       warehouseId: session.warehouseId,
       companyId: Number(targetCompany.id),
       companyCode: targetCompany.company_code,
@@ -45,6 +48,7 @@ export async function POST(request: NextRequest) {
       {
         company_id: Number(targetCompany.id),
         company_code: targetCompany.company_code,
+        products,
       },
       "Company switched"
     )

@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth"
 import { fail } from "@/lib/api-response"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireFeature } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 import { getUserAccessProfile } from "@/lib/rbac"
 
 type LaborAccess = {
@@ -19,6 +20,7 @@ export async function getLaborAccess() {
   try {
     const session = await getSession()
     if (!session) return { error: fail("UNAUTHORIZED", "Unauthorized", 401) as Response }
+    await assertProductEnabled(session.companyId, "WMS")
 
     const policy = await getEffectivePolicy(
       session.companyId,
@@ -52,6 +54,8 @@ export async function getLaborAccess() {
 
     return { access }
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return { error: productGuarded as Response }
     const guarded = guardToFailResponse(error)
     if (guarded) return { error: guarded as Response }
     const message = error instanceof Error ? error.message : "Failed to validate labor access"

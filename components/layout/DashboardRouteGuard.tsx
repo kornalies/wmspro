@@ -2,7 +2,7 @@
 
 import { useEffect } from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { canAccessPath } from "@/lib/route-permissions"
+import { canAccessPath, canAccessProducts, getRequiredProductsForPath } from "@/lib/route-permissions"
 import { useAuth } from "@/hooks/use-auth"
 
 export function DashboardRouteGuard({ children }: { children: React.ReactNode }) {
@@ -18,6 +18,12 @@ export function DashboardRouteGuard({ children }: { children: React.ReactNode })
       return
     }
 
+    const requiredProducts = getRequiredProductsForPath(pathname)
+    if (!canAccessProducts(user, requiredProducts)) {
+      router.replace("/product-unavailable")
+      return
+    }
+
     if (!canAccessPath(user, pathname)) {
       router.replace("/dashboard")
     }
@@ -25,6 +31,7 @@ export function DashboardRouteGuard({ children }: { children: React.ReactNode })
 
   if (isLoading) return null
   if (!isAuthenticated) return null
+  if (!canAccessProducts(user, getRequiredProductsForPath(pathname))) return null
   if (!canAccessPath(user, pathname)) return null
 
   return <>{children}</>

@@ -1,5 +1,8 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
+
+import { useGateOutLogs } from "@/hooks/use-gate";
 import {
     Table,
     TableBody,
@@ -10,23 +13,18 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 
+type GateOutRow = {
+    id: number;
+    gate_out_number: string;
+    vehicle_number: string;
+    driver_name: string;
+    gate_out_datetime: string;
+    status?: string;
+};
+
 export default function GateOutList() {
-    const history = [
-        {
-            id: "1",
-            vehicleNumber: "KA-05-MM-9999",
-            driverName: "Robert Fox",
-            outTime: "2024-02-16 06:00 PM",
-            status: "EXITED",
-        },
-        {
-            id: "2",
-            vehicleNumber: "MH-12-QQ-1111",
-            driverName: "Cody Fisher",
-            outTime: "2024-02-16 04:30 PM",
-            status: "EXITED",
-        },
-    ];
+    const { data, isLoading } = useGateOutLogs();
+    const history = (data?.data as GateOutRow[] | undefined) ?? [];
 
     return (
         <div className="mt-6 rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
@@ -43,16 +41,28 @@ export default function GateOutList() {
                     </TableRow>
                 </TableHeader>
                 <TableBody>
-                    {history.map((h) => (
-                        <TableRow key={h.id}>
-                            <TableCell className="font-medium">{h.vehicleNumber}</TableCell>
-                            <TableCell>{h.driverName}</TableCell>
-                            <TableCell>{h.outTime}</TableCell>
-                            <TableCell>
-                                <Badge variant="secondary">{h.status}</Badge>
+                    {isLoading ? (
+                        <TableRow>
+                            <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                                <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                             </TableCell>
                         </TableRow>
-                    ))}
+                    ) : history.length ? history.map((h) => (
+                        <TableRow key={h.id}>
+                            <TableCell className="font-medium">{h.vehicle_number}</TableCell>
+                            <TableCell>{h.driver_name}</TableCell>
+                            <TableCell>{new Date(h.gate_out_datetime).toLocaleString()}</TableCell>
+                            <TableCell>
+                                <Badge variant="secondary">{h.status || "EXITED"}</Badge>
+                            </TableCell>
+                        </TableRow>
+                    )) : (
+                        <TableRow>
+                            <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                                No gate exits recorded.
+                            </TableCell>
+                        </TableRow>
+                    )}
                 </TableBody>
             </Table>
         </div>

@@ -16,9 +16,16 @@ type GrnRow = {
   invoice_number: string
   total_items: number
   total_quantity: number
+  total_value?: number
   status: string
   created_at: string
   created_by_name?: string | null
+  supplier_name?: string | null
+  supplier_gst?: string | null
+  source_channel?: string | null
+  invoice_quantity?: number | null
+  received_quantity?: number | null
+  damage_quantity?: number | null
 }
 
 type GrnListResponse = {
@@ -37,6 +44,9 @@ type GrnQueryParams = {
   status?: string
   search?: string
   warehouse_id?: string
+  client_id?: string
+  date_from?: string
+  date_to?: string
 }
 
 function buildQuery(params: GrnQueryParams) {
@@ -45,6 +55,9 @@ function buildQuery(params: GrnQueryParams) {
   if (params.limit) sp.set("limit", String(params.limit))
   if (params.status && params.status !== "all") sp.set("status", params.status)
   if (params.search) sp.set("search", params.search)
+  if (params.client_id && params.client_id !== "all") sp.set("client_id", params.client_id)
+  if (params.date_from) sp.set("date_from", params.date_from)
+  if (params.date_to) sp.set("date_to", params.date_to)
   if (params.warehouse_id && params.warehouse_id !== "all") {
     sp.set("warehouse_id", params.warehouse_id)
   }

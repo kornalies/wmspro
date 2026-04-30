@@ -3,11 +3,13 @@ import { NextRequest } from "next/server"
 import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
 
     const { searchParams } = new URL(request.url)
     const clientId = searchParams.get("client_id")
@@ -40,6 +42,8 @@ export async function GET(request: NextRequest) {
 
     return ok(result.rows)
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to fetch analytics report"
     return fail("SERVER_ERROR", message, 500)
   }

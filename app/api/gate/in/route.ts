@@ -6,6 +6,7 @@ import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { requireScope, guardToFailResponse } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 const gateInSchema = z.object({
   warehouse_id: z.number().positive().optional(),
@@ -37,6 +38,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "gate.in.create")
     const policy = await getEffectivePolicy(
       session.companyId,
@@ -105,6 +107,8 @@ export async function GET(request: NextRequest) {
 
     return ok(result.rows)
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to fetch gate-in logs"
@@ -116,6 +120,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "gate.in.create")
     const policy = await getEffectivePolicy(
       session.companyId,
@@ -178,6 +183,8 @@ export async function POST(request: NextRequest) {
 
     return ok(result.rows[0], "Gate In recorded successfully")
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to record gate-in"

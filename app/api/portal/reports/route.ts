@@ -3,7 +3,7 @@ import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
 import { DO_FULFILLMENT_STATUSES } from "@/lib/do-status"
 
-import { hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
+import { guardPortalProductError, hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
 
 export async function GET(request: Request) {
   try {
@@ -113,6 +113,8 @@ export async function GET(request: Request) {
       sla: sla.rows[0] || {},
     })
   } catch (error: unknown) {
+    const productGuarded = guardPortalProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to fetch report summary"
     return fail("SERVER_ERROR", message, 500)
   }

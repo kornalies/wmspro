@@ -9,6 +9,7 @@ import {
   requireFeature,
   requirePolicyPermission,
 } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 type InvoiceRow = {
   id: number
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     const policy = await getEffectivePolicy(
       session.companyId,
       session.userId,
@@ -302,6 +304,8 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to fetch billing data"

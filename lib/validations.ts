@@ -4,6 +4,7 @@ export const loginSchema = z.object({
   company_code: z.string().trim().min(2, "Company code is required"),
   username: z.string().trim().min(3, "Username must be at least 3 characters"),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  requested_product: z.enum(["WMS", "FF"]).optional(),
 })
 
 export const registerSchema = z.object({

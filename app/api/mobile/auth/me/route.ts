@@ -1,11 +1,16 @@
 import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
+import { securityTelemetry } from "@/lib/security-telemetry"
 
 export async function GET() {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    if ((session.actorType ?? "").toLowerCase() !== "mobile") {
+      securityTelemetry.onEvent("mobile_auth_actor_scope_rejected", "route=/api/mobile/auth/me")
+      return fail("FORBIDDEN", "Token actor scope is not allowed for mobile auth profile", 403)
+    }
 
     const result = await query(
       `SELECT

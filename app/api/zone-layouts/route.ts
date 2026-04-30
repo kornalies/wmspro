@@ -61,11 +61,20 @@ export async function GET(request: NextRequest) {
         zl.bin_code,
         zl.bin_name,
         zl.capacity_units,
+        COALESCE(stock.stock_count, 0)::int AS stock_count,
         zl.sort_order,
         zl.attributes,
         zl.is_active
       FROM warehouse_zone_layouts zl
       JOIN warehouses w ON w.id = zl.warehouse_id
+      LEFT JOIN (
+        SELECT
+          zone_layout_id,
+          COUNT(*) FILTER (WHERE status IN ('IN_STOCK', 'RESERVED'))::int AS stock_count
+        FROM stock_serial_numbers
+        WHERE zone_layout_id IS NOT NULL
+        GROUP BY zone_layout_id
+      ) stock ON stock.zone_layout_id = zl.id
       ${whereClause}
       ORDER BY w.warehouse_name, zl.zone_code, zl.rack_code, zl.bin_code`,
       params

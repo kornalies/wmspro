@@ -74,7 +74,7 @@ export default function WESPage() {
   const [adapterType, setAdapterType] = useState("MOCK")
 
   const [commandType, setCommandType] = useState("MOVE")
-  const [commandPayload, setCommandPayload] = useState('{"task":"pick_to_pack"}')
+  const [commandPayload, setCommandPayload] = useState("{}")
 
   const equipmentQuery = useWesEquipment()
   const commandsQuery = useWesCommands(selectedEquipmentId)

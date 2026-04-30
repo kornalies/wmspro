@@ -3,11 +3,13 @@ import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 export async function GET(request: Request) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     const { searchParams } = new URL(request.url)
     const requestedWarehouseId = Number(searchParams.get("warehouse_id") || 0)
     const warehouseId = requestedWarehouseId || session.warehouseId || 0
@@ -68,6 +70,8 @@ export async function GET(request: Request) {
       },
     })
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to fetch GRN form data"

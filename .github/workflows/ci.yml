@@ -36,6 +36,9 @@ jobs:
       - name: Validate CI environment variables
         run: npm run ci:validate-env
 
+      - name: Auth Domain Guard
+        run: npm run ci:auth-domain-guard
+
       - name: Lint
         run: npm run lint
 

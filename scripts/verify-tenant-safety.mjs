@@ -15,6 +15,11 @@ const REQUIRED_RLS_TABLES = [
   "gate_out",
   "stock_movements",
   "stock_serial_numbers",
+  "tenant_products",
+  "ff_shipments",
+  "ff_shipment_legs",
+  "ff_milestones",
+  "ff_documents",
 ]
 
 async function main() {
