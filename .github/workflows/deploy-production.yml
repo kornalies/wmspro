@@ -37,6 +37,22 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Package release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --output=/tmp/wmspro-release.tar.gz HEAD
+
+      - name: Upload release archive
+        shell: bash
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          scp /tmp/wmspro-release.tar.gz "${PROD_USER}@${PROD_HOST}:/tmp/wmspro-release-${GITHUB_RUN_ID}.tar.gz"
+
       - name: Deploy on production server
         shell: bash
         env:
@@ -44,24 +60,37 @@ jobs:
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
           DEPLOY_REF: ${{ inputs.git_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
+          DEPLOY_SHA="$(git rev-parse HEAD)"
           ssh "${PROD_USER}@${PROD_HOST}" <<EOF
           set -euo pipefail
-          cd "${PROD_APP_DIR}"
-          git fetch --all --tags
-          if git show-ref --verify --quiet "refs/remotes/origin/${DEPLOY_REF}"; then
-            # Branch ref: force local branch to remote tip to avoid stale checkout.
-            git checkout -B "${DEPLOY_REF}" "origin/${DEPLOY_REF}"
+          RELEASE_ROOT="/opt/wmspro/releases"
+          BACKUP_ROOT="/opt/wmspro/backups"
+          ARCHIVE="/tmp/wmspro-release-${GITHUB_RUN_ID}.tar.gz"
+          RELEASE_ID="$(date -u +%Y%m%d-%H%M%S)-${DEPLOY_SHA:0:7}"
+          RELEASE_DIR="\${RELEASE_ROOT}/\${RELEASE_ID}"
+          mkdir -p "\${RELEASE_ROOT}" "\${BACKUP_ROOT}" "\${RELEASE_DIR}"
+          tar -xzf "\${ARCHIVE}" -C "\${RELEASE_DIR}"
+          rm -f "\${ARCHIVE}"
+          if [ -f "${PROD_APP_DIR}/.env.production" ]; then
+            cp "${PROD_APP_DIR}/.env.production" "\${RELEASE_DIR}/.env.production"
           else
-            # Tag or commit SHA ref.
-            git checkout --detach "${DEPLOY_REF}"
+            echo "Missing ${PROD_APP_DIR}/.env.production"
+            exit 1
           fi
+          chown -R wms:wms "\${RELEASE_DIR}"
+          cd "\${RELEASE_DIR}"
           npm ci
           set -a
           source .env.production
           set +a
           npm run db:migrate
-          npx next build
+          npm run build
+          if [ -e "${PROD_APP_DIR}" ] && [ ! -L "${PROD_APP_DIR}" ]; then
+            mv "${PROD_APP_DIR}" "\${BACKUP_ROOT}/current-before-\${RELEASE_ID}"
+          fi
+          ln -sfn "\${RELEASE_DIR}" "${PROD_APP_DIR}"
           sudo systemctl restart wmspro
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:3000/api/health >/dev/null; then
