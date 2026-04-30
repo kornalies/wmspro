@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getClient, setTenantContext } from "@/lib/db"
+import { securityTelemetry } from "@/lib/security-telemetry"
 
 export async function GET() {
   const startedAt = Date.now()
@@ -44,6 +45,8 @@ export async function GET() {
           db: "ok",
           tenant_context: "ok",
         },
+        securityTelemetry: securityTelemetry.snapshot(),
+        securityStatus: securityTelemetry.status(),
         duration_ms: Date.now() - startedAt,
         timestamp: new Date().toISOString(),
       },
@@ -61,6 +64,8 @@ export async function GET() {
         status: "error",
         service: "wms-frontend",
         error: "DB_OR_TENANT_CONTEXT_UNHEALTHY",
+        securityTelemetry: securityTelemetry.snapshot(),
+        securityStatus: securityTelemetry.status(),
         duration_ms: Date.now() - startedAt,
         timestamp: new Date().toISOString(),
       },

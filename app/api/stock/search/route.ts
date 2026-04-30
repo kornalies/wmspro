@@ -3,15 +3,18 @@ import { NextRequest } from "next/server"
 import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, paginated } from "@/lib/api-response"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
 
     const { searchParams } = new URL(request.url)
     const serial = searchParams.get("serial")?.trim()
     const item = searchParams.get("item")?.trim()
+    const clientId = Number(searchParams.get("client_id") || 0)
     const status = searchParams.get("status")
     const warehouseId = Number(searchParams.get("warehouse_id") || 0)
     const minAge = searchParams.get("min_age")
@@ -42,6 +45,10 @@ export async function GET(request: NextRequest) {
     if (status && status !== "all") {
       where.push(`ssn.status = $${idx++}`)
       params.push(status)
+    }
+    if (clientId) {
+      where.push(`ssn.client_id = $${idx++}`)
+      params.push(clientId)
     }
     if (warehouseId) {
       where.push(`ssn.warehouse_id = $${idx++}`)
@@ -123,6 +130,8 @@ export async function GET(request: NextRequest) {
       }
     )
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to search stock"
     return fail("SERVER_ERROR", message, 500)
   }

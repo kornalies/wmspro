@@ -146,62 +146,17 @@ export default function ClientPortalPage() {
   const slaPct = Number(summary?.sla?.on_time_pct ?? 100)
   const fulfillmentPct = totalOrders > 0 ? Math.round((fulfilledOrders / totalOrders) * 100) : 100
 
-  const inventoryTrend = useMemo(
-    () => [
-      { week: "W1", inStock: Math.max(inStockUnits + 10, 2), dispatched: Math.max(dispatchedUnits - 5, 0) },
-      { week: "W2", inStock: Math.max(inStockUnits + 8, 2), dispatched: Math.max(dispatchedUnits - 3, 0) },
-      { week: "W3", inStock: Math.max(inStockUnits + 5, 2), dispatched: Math.max(dispatchedUnits - 1, 0) },
-      { week: "W4", inStock: Math.max(inStockUnits + 3, 1), dispatched: Math.max(dispatchedUnits + 1, 0) },
-      { week: "W5", inStock: Math.max(inStockUnits + 1, 1), dispatched: Math.max(dispatchedUnits + 3, 0) },
-      { week: "W6", inStock: inStockUnits, dispatched: dispatchedUnits },
-    ],
-    [dispatchedUnits, inStockUnits]
-  )
-
-  const orderFlowTrend = useMemo(
-    () => [
-      { week: "W1", received: Math.max(totalOrders - 2, 0), fulfilled: Math.max(fulfilledOrders - 2, 0), pending: Math.max(pendingOrders - 1, 0) },
-      { week: "W2", received: Math.max(totalOrders, 0), fulfilled: Math.max(fulfilledOrders - 1, 0), pending: Math.max(pendingOrders - 1, 0) },
-      { week: "W3", received: Math.max(totalOrders - 1, 0), fulfilled: Math.max(fulfilledOrders - 1, 0), pending: Math.max(pendingOrders - 1, 0) },
-      { week: "W4", received: Math.max(totalOrders - 3, 0), fulfilled: Math.max(fulfilledOrders - 2, 0), pending: Math.max(pendingOrders, 0) },
-      { week: "W5", received: Math.max(totalOrders - 1, 0), fulfilled: Math.max(fulfilledOrders - 1, 0), pending: Math.max(pendingOrders - 1, 0) },
-      { week: "W6", received: totalOrders, fulfilled: fulfilledOrders, pending: pendingOrders },
-    ],
-    [fulfilledOrders, pendingOrders, totalOrders]
-  )
-
-  const warehouseCards = useMemo(
-    () => [
-      {
-        name: "GWU CI Warehouse",
-        location: "Chennai, Tamil Nadu - Main",
-        zones: 4,
-        skus: inStockUnits,
-        value: outstandingAmount,
-        utilization: 78,
-        status: "Active",
-      },
-      {
-        name: "GWU Chennai",
-        location: "Chennai, Tamil Nadu - Secondary",
-        zones: 2,
-        skus: Math.max(Math.floor(inStockUnits / 2), 0),
-        value: Math.max(outstandingAmount * 0.4, 0),
-        utilization: 56,
-        status: "Active",
-      },
-      {
-        name: "GWU Bengaluru",
-        location: "Bengaluru, Karnataka - Secondary",
-        zones: 2,
-        skus: Math.max(Math.floor(inStockUnits / 4), 0),
-        value: Math.max(outstandingAmount * 0.2, 0),
-        utilization: 34,
-        status: "Setup",
-      },
-    ],
-    [inStockUnits, outstandingAmount]
-  )
+  const inventoryTrend: Array<{ week: string; inStock: number; dispatched: number }> = []
+  const orderFlowTrend: Array<{ week: string; received: number; fulfilled: number; pending: number }> = []
+  const warehouseCards: Array<{
+    name: string
+    location: string
+    zones: number
+    skus: number
+    value: number
+    utilization: number
+    status: string
+  }> = []
 
   const alerts = useMemo(
     () => [
@@ -238,13 +193,18 @@ export default function ClientPortalPage() {
   )
 
   const recentActivity = useMemo(
-    () => [
-      { key: "DO", text: `${doLabel}-007 dispatched - ${Math.max(dispatchedUnits, 1)} unit(s)` },
-      { key: "GRN", text: `GRN confirmation updates: ${Number(summary?.grn?.confirmed_grn ?? 0)} confirmed` },
-      { key: "INV", text: `${totalInvoices} invoice(s) available, ${overdueInvoices} overdue` },
-      { key: "ASN", text: showAsn ? "ASN requests are enabled for this client" : "ASN requests are disabled by policy" },
-    ],
-    [dispatchedUnits, doLabel, overdueInvoices, showAsn, summary?.grn?.confirmed_grn, totalInvoices]
+    () =>
+      [
+        totalOrders > 0 ? { key: "DO", text: `${totalOrders} ${doLabel} record(s), ${fulfilledOrders} fulfilled` } : null,
+        Number(summary?.grn?.total_grn ?? 0) > 0
+          ? {
+              key: "GRN",
+              text: `${Number(summary?.grn?.total_grn ?? 0)} GRN record(s), ${Number(summary?.grn?.confirmed_grn ?? 0)} confirmed`,
+            }
+          : null,
+        totalInvoices > 0 ? { key: "INV", text: `${totalInvoices} invoice(s) available, ${overdueInvoices} overdue` } : null,
+      ].filter((entry): entry is { key: string; text: string } => entry !== null),
+    [doLabel, fulfilledOrders, overdueInvoices, summary?.grn?.confirmed_grn, summary?.grn?.total_grn, totalInvoices, totalOrders]
   )
 
   function formatCurrencyINR(value: number) {
@@ -445,33 +405,45 @@ export default function ClientPortalPage() {
             <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
               <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Inventory Trend - Last 6 Weeks</p>
               <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={inventoryTrend}>
-                    <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
-                    <XAxis dataKey="week" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip />
-                    <Area type="monotone" dataKey="inStock" stroke="#2563eb" fill="#bfdbfe" fillOpacity={0.5} name="In stock" />
-                    <Area type="monotone" dataKey="dispatched" stroke="#059669" fill="#a7f3d0" fillOpacity={0.5} name="Dispatched" />
-                  </AreaChart>
-                </ResponsiveContainer>
+                {inventoryTrend.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={inventoryTrend}>
+                      <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
+                      <XAxis dataKey="week" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Area type="monotone" dataKey="inStock" stroke="#2563eb" fill="#bfdbfe" fillOpacity={0.5} name="In stock" />
+                      <Area type="monotone" dataKey="dispatched" stroke="#059669" fill="#a7f3d0" fillOpacity={0.5} name="Dispatched" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-200 text-sm text-neutral-500">
+                    No historical inventory trend data available.
+                  </div>
+                )}
               </div>
             </article>
 
             <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
               <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Order Flow - Last 6 Weeks</p>
               <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={orderFlowTrend}>
-                    <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
-                    <XAxis dataKey="week" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip />
-                    <Bar dataKey="received" fill="#2563eb" radius={[4, 4, 0, 0]} name="Received" />
-                    <Bar dataKey="fulfilled" fill="#65a30d" radius={[4, 4, 0, 0]} name="Fulfilled" />
-                    <Bar dataKey="pending" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Pending" />
-                  </BarChart>
-                </ResponsiveContainer>
+                {orderFlowTrend.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={orderFlowTrend}>
+                      <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
+                      <XAxis dataKey="week" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="received" fill="#2563eb" radius={[4, 4, 0, 0]} name="Received" />
+                      <Bar dataKey="fulfilled" fill="#65a30d" radius={[4, 4, 0, 0]} name="Fulfilled" />
+                      <Bar dataKey="pending" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Pending" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-200 text-sm text-neutral-500">
+                    No historical order flow data available.
+                  </div>
+                )}
               </div>
             </article>
           </section>
@@ -479,7 +451,7 @@ export default function ClientPortalPage() {
           <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
             <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Warehouse View - Location Distribution</p>
             <div className="grid gap-3 lg:grid-cols-3">
-              {warehouseCards.map((warehouse) => (
+              {warehouseCards.length ? warehouseCards.map((warehouse) => (
                 <article key={warehouse.name} className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                   <p className="text-2xl font-medium">{warehouse.name}</p>
                   <p className="text-sm text-neutral-600">{warehouse.location}</p>
@@ -493,7 +465,11 @@ export default function ClientPortalPage() {
                     {warehouse.status}
                   </span>
                 </article>
-              ))}
+              )) : (
+                <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 p-6 text-sm text-neutral-500 lg:col-span-3">
+                  No warehouse distribution data available for this portal account.
+                </div>
+              )}
             </div>
           </section>
 
@@ -513,7 +489,7 @@ export default function ClientPortalPage() {
             <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
               <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Recent Activity</p>
               <div className="space-y-3">
-                {recentActivity.map((activity, index) => (
+                {recentActivity.length ? recentActivity.map((activity, index) => (
                   <div key={`${activity.key}-${index}`} className="flex items-start gap-3 border-b border-neutral-100 pb-3 last:border-b-0 last:pb-0">
                     <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-xs font-medium text-blue-700">
                       {activity.key}
@@ -523,7 +499,11 @@ export default function ClientPortalPage() {
                       <p className="text-xs text-neutral-500">Client Portal</p>
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 p-6 text-sm text-neutral-500">
+                    No recent portal activity available.
+                  </div>
+                )}
               </div>
             </article>
           </section>

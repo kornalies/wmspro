@@ -108,7 +108,7 @@ export default function IntegrationsPage() {
     '[{"source_path":"do_number","target_path":"order.id","data_type":"string","required":true,"sequence_no":1}]'
   )
 
-  const [dispatchPayload, setDispatchPayload] = useState('{"sample": true}')
+  const [dispatchPayload, setDispatchPayload] = useState("{}")
   const [dispatchEntityType, setDispatchEntityType] = useState("DO")
   const [dispatchEntityId, setDispatchEntityId] = useState("")
 

@@ -109,12 +109,42 @@ export default function WarehouseLocationMap({
     )
   }
 
+  if (tilesFailed) {
+    return (
+      <div className="rounded-md border bg-slate-50 p-4">
+        <div className="mb-3">
+          <p className="text-sm font-semibold text-slate-900">Map tiles unavailable</p>
+          <p className="text-sm text-slate-500">
+            External map tiles could not be loaded. Warehouse locations are listed below.
+          </p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {markers.map(({ warehouse, coordinates }) => (
+            <button
+              key={warehouse.id}
+              type="button"
+              className="rounded-md border bg-white p-3 text-left hover:bg-blue-50"
+              onClick={() => onSelectWarehouse(warehouse.id)}
+            >
+              <p className="text-sm font-semibold text-slate-900">{warehouse.warehouse_name}</p>
+              <p className="font-mono text-xs text-slate-500">{warehouse.warehouse_code}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {[warehouse.city, warehouse.state].filter(Boolean).join(", ") || "Location not set"}
+              </p>
+              <p className="mt-1 font-mono text-xs text-slate-400">{coordinates.join(", ")}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="overflow-hidden rounded-md border">
       <MapContainer
         center={defaultCenter}
         zoom={5}
-        className="h-[420px] w-full"
+        className="h-[320px] w-full"
         scrollWheelZoom={true}
       >
         <TileLayer
@@ -158,11 +188,6 @@ export default function WarehouseLocationMap({
           </CircleMarker>
         ))}
       </MapContainer>
-      {tilesFailed ? (
-        <div className="border-t bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
-          Base map tiles could not be loaded from external providers. Markers still work; check network/firewall or VPN.
-        </div>
-      ) : null}
     </div>
   )
 }

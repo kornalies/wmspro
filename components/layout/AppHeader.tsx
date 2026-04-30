@@ -122,7 +122,7 @@ export function AppHeader() {
           >
             <Menu className="h-4 w-4" />
           </Button>
-          <h2 className="text-lg font-semibold">WMSPro - GWU Software Solutions</h2>
+          <h2 className="text-lg font-semibold">GWU WMS - GWU Software Solutions</h2>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>Home</span>

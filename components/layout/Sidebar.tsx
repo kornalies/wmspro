@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
-import { canAccessPermissions, getRequiredPermissionsForPath } from '@/lib/route-permissions'
+import { canAccessPath } from '@/lib/route-permissions'
 import {
     LayoutDashboard,
     PackagePlus,
@@ -30,6 +30,7 @@ import {
     Gauge,
     Cable,
     Bot,
+    Ship,
     ChevronDown,
     ChevronRight,
 } from 'lucide-react'
@@ -88,6 +89,12 @@ const sections: SidebarSection[] = [
                 icon: PackageMinus,
                 href: '/do',
                 color: 'text-pink-700',
+            },
+            {
+                label: 'Freight',
+                icon: Ship,
+                href: '/freight',
+                color: 'text-cyan-400',
             },
             {
                 label: 'Stock Search',
@@ -249,6 +256,12 @@ const sections: SidebarSection[] = [
                 color: 'text-cyan-300',
             },
             {
+                label: 'Security',
+                icon: ShieldCheck,
+                href: '/admin/security',
+                color: 'text-orange-300',
+            },
+            {
                 label: 'Companies',
                 icon: Building2,
                 href: '/admin/companies',
@@ -274,8 +287,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             sections
                 .map((section) => {
                     const routes = section.routes.filter((route) => {
-                        const allowedPermissions = getRequiredPermissionsForPath(route.href)
-                        return canAccessPermissions(user, allowedPermissions)
+                        return canAccessPath(user, route.href)
                     })
                     return { ...section, routes }
                 })
@@ -287,7 +299,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="flex h-full flex-col space-y-4 overflow-y-auto bg-gray-900 py-4 text-white">
             <div className="flex-1 px-3 py-2">
                 <Link href="/dashboard" className="flex items-center pl-3 mb-14">
-                    <h1 className="text-2xl font-bold">WMSPro</h1>
+                    <h1 className="text-2xl font-bold">GWU WMS</h1>
                 </Link>
                 <div className="space-y-4">
                     {visibleSections.map((section) => {

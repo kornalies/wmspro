@@ -1,7 +1,10 @@
 export type AccessUser = {
   role?: string | null
   permissions?: string[] | null
+  products?: string[] | null
 }
+
+export type ProductCode = "WMS" | "FF"
 
 type RoutePermissionRule = {
   href: string
@@ -45,6 +48,7 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   { href: "/admin/tenant-settings", permissions: ["settings.read", "settings.update"] },
   { href: "/admin/scopes", permissions: ["scopes.read", "scopes.update"] },
   { href: "/admin/audit", permissions: ["audit.view"] },
+  { href: "/admin/security", permissions: ["audit.view"] },
   { href: "/admin/companies", permissions: ["admin.companies.manage"] },
   { href: "/finance/invoices", permissions: ["finance.view"] },
   { href: "/finance/billing", permissions: ["finance.view"] },
@@ -54,9 +58,25 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   { href: "/labor", permissions: ["labor.view", "labor.manage", "do.manage", "reports.view"] },
   { href: "/integrations", permissions: ["integration.view", "integration.manage"] },
   { href: "/wes", permissions: ["wes.view", "wes.manage"] },
+  { href: "/freight", permissions: ["freight.view", "freight.manage"] },
 ]
 
 const SORTED_RULES = ROUTE_PERMISSION_RULES.slice().sort((a, b) => b.href.length - a.href.length)
+const WMS_PREFIXES = [
+  "/dashboard",
+  "/grn",
+  "/do",
+  "/stock",
+  "/gate",
+  "/admin",
+  "/finance",
+  "/reports",
+  "/labor",
+  "/integrations",
+  "/wes",
+  "/portal",
+]
+const FF_PREFIXES = ["/freight"]
 
 export function getRequiredPermissionsForPath(pathname: string): string[] {
   const normalizedPath = String(pathname || "").trim()
@@ -81,7 +101,41 @@ export function canAccessPermissions(user: AccessUser | null | undefined, permis
   return permissions.some((perm) => userPermissions.includes(perm))
 }
 
+export function getRequiredProductsForPath(pathname: string): ProductCode[] {
+  const normalizedPath = String(pathname || "").trim()
+  if (!normalizedPath) return []
+
+  if (FF_PREFIXES.some((prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`))) {
+    return ["FF"]
+  }
+
+  if (WMS_PREFIXES.some((prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`))) {
+    return ["WMS"]
+  }
+
+  return []
+}
+
+export function canAccessProducts(
+  user: AccessUser | null | undefined,
+  products: ProductCode[]
+): boolean {
+  if (!products.length) return true
+  if (!user) return false
+
+  const assigned = Array.isArray(user.products)
+    ? user.products.map((value) => String(value).trim().toUpperCase()).filter(Boolean)
+    : []
+
+  if (!assigned.length) {
+    return products.includes("WMS")
+  }
+
+  return products.some((product) => assigned.includes(product))
+}
+
 export function canAccessPath(user: AccessUser | null | undefined, pathname: string): boolean {
   const permissions = getRequiredPermissionsForPath(pathname)
-  return canAccessPermissions(user, permissions)
+  const products = getRequiredProductsForPath(pathname)
+  return canAccessPermissions(user, permissions) && canAccessProducts(user, products)
 }

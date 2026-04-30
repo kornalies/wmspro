@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
-import { hasPortalFeaturePermission } from "@/app/api/portal/_utils"
+import { guardPortalProductError, hasPortalFeaturePermission } from "@/app/api/portal/_utils"
 
 const PORTAL_FEATURE_KEYS = [
   "portal.inventory.view",
@@ -30,6 +30,8 @@ export async function GET() {
 
     return ok({ features, allowed })
   } catch (error: unknown) {
+    const productGuarded = guardPortalProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to fetch portal feature permissions"
     return fail("SERVER_ERROR", message, 500)
   }

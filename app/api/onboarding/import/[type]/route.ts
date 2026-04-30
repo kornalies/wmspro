@@ -6,6 +6,7 @@ import { fail, ok } from "@/lib/api-response"
 import { getClient, query, setTenantContext } from "@/lib/db"
 import { parseBoolean, parseCsv, parseNumber, type CsvRow } from "@/lib/csv-import"
 import { normalizeRoleCode } from "@/lib/role-utils"
+import { writeAudit } from "@/lib/audit"
 
 type ImportType = "clients" | "items" | "users" | "opening-stock" | "rate-cards"
 
@@ -439,6 +440,25 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ty
     } else {
       report = await importRateCards(rows, session.userId, session.companyId)
     }
+
+    await writeAudit({
+      companyId: session.companyId,
+      actorUserId: session.userId,
+      actorType: session.actorType || "web",
+      action: `onboarding.import.${importType}`,
+      entityType: "onboarding_import",
+      entityId: `${importType}:${Date.now()}`,
+      after: {
+        type: importType,
+        file_name: file.name,
+        total_rows: report.total_rows,
+        inserted: report.inserted,
+        updated: report.updated,
+        skipped: report.skipped,
+        errors: report.errors.length,
+      },
+      req: request,
+    })
 
     return ok({
       type: importType,

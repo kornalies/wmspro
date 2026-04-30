@@ -1,6 +1,6 @@
 ﻿"use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Download, FileText, Loader2 } from "lucide-react"
 import { toast } from "sonner"
@@ -28,6 +28,7 @@ import {
 
 import { apiClient } from "@/lib/api-client"
 import { handleError } from "@/lib/error-handler"
+import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -227,11 +228,14 @@ function mapBillingProfileToForm(profile: BillingProfile | null): BillingProfile
 }
 
 export default function BillingPage() {
+  const { user } = useAuth()
+  const companyKey = user?.company_id ?? "unknown"
   const [dateFrom, setDateFrom] = useState(THIRTY_DAYS_AGO_ISO)
   const [dateTo, setDateTo] = useState(TODAY_ISO)
   const [clientFilter, setClientFilter] = useState("all")
   const [warehouseFilter, setWarehouseFilter] = useState("all")
   const [applied, setApplied] = useState({ dateFrom, dateTo, clientFilter: "all", warehouseFilter: "all" })
+  const [pageSection, setPageSection] = useState<"operations" | "preview" | "exceptions" | "analytics">("operations")
   const [workspaceTab, setWorkspaceTab] = useState<"unbilled" | "unrated" | "exceptions">("unbilled")
   const [preview, setPreview] = useState<BillingPreview | null>(null)
   const [exceptionActions, setExceptionActions] = useState<Record<string, ExceptionActionLog>>({})
@@ -251,21 +255,21 @@ export default function BillingPage() {
   const [profileDraft, setProfileDraft] = useState<BillingProfileForm | null>(null)
 
   const clientsQuery = useQuery({
-    queryKey: ["clients", "active"],
+    queryKey: ["clients", "active", companyKey],
     queryFn: async () => {
       const res = await apiClient.get<{ id: number; client_name: string }[]>("/clients?is_active=true")
       return res.data ?? []
     },
   })
   const billingProfilesQuery = useQuery({
-    queryKey: ["finance", "billing-profile"],
+    queryKey: ["finance", "billing-profile", companyKey],
     queryFn: async () => {
       const res = await apiClient.get<BillingProfile[]>("/finance/billing-profile")
       return res.data ?? []
     },
   })
   const warehousesQuery = useQuery({
-    queryKey: ["warehouses", "active"],
+    queryKey: ["warehouses", "active", companyKey],
     queryFn: async () => {
       const res = await apiClient.get<WarehouseOption[]>("/warehouses?is_active=true")
       return res.data ?? []
@@ -273,7 +277,7 @@ export default function BillingPage() {
   })
 
   const billingQuery = useQuery({
-    queryKey: ["finance", "billing", applied],
+    queryKey: ["finance", "billing", companyKey, applied],
     queryFn: async () => {
       const qp = new URLSearchParams()
       qp.set("date_from", applied.dateFrom)
@@ -384,39 +388,53 @@ export default function BillingPage() {
     (billingProfilesQuery.data ?? []).find((row) => String(row.client_id) === effectiveProfileClientId) ?? null
   const resolvedProfileForm = profileDraft ?? mapBillingProfileToForm(selectedBillingProfile)
 
+  useEffect(() => {
+    setDateFrom(THIRTY_DAYS_AGO_ISO)
+    setDateTo(TODAY_ISO)
+    setProfileClientId("")
+    setProfileDraft(null)
+    setClientFilter("all")
+    setWarehouseFilter("all")
+    setApplied({ dateFrom: THIRTY_DAYS_AGO_ISO, dateTo: TODAY_ISO, clientFilter: "all", warehouseFilter: "all" })
+    setPreview(null)
+  }, [companyKey])
+
   const unratedQuery = useQuery({
-    queryKey: ["finance", "billing-transactions", "unrated", applied],
+    queryKey: ["finance", "billing-transactions", "unrated", companyKey, applied],
     queryFn: async () => {
       const qp = new URLSearchParams()
       qp.set("status", "UNRATED")
       qp.set("date_from", applied.dateFrom)
       qp.set("date_to", applied.dateTo)
       if (applied.clientFilter !== "all") qp.set("client_id", applied.clientFilter)
+      if (applied.warehouseFilter !== "all") qp.set("warehouse_id", applied.warehouseFilter)
       const res = await apiClient.get<UnratedTransaction[]>(`/finance/billing-transactions?${qp.toString()}`)
       return res.data ?? []
     },
   })
 
   const unbilledQuery = useQuery({
-    queryKey: ["finance", "billing-transactions", "unbilled", applied],
+    queryKey: ["finance", "billing-transactions", "unbilled", companyKey, applied],
     queryFn: async () => {
       const qp = new URLSearchParams()
       qp.set("status", "UNBILLED")
       qp.set("date_from", applied.dateFrom)
       qp.set("date_to", applied.dateTo)
       if (applied.clientFilter !== "all") qp.set("client_id", applied.clientFilter)
+      if (applied.warehouseFilter !== "all") qp.set("warehouse_id", applied.warehouseFilter)
       const res = await apiClient.get<UnratedTransaction[]>(`/finance/billing-transactions?${qp.toString()}`)
       return res.data ?? []
     },
   })
 
   const allTransactionsQuery = useQuery({
-    queryKey: ["finance", "billing-transactions", "all", applied],
+    queryKey: ["finance", "billing-transactions", "all", companyKey, applied],
     queryFn: async () => {
       const qp = new URLSearchParams()
       qp.set("date_from", applied.dateFrom)
       qp.set("date_to", applied.dateTo)
       if (applied.clientFilter !== "all") qp.set("client_id", applied.clientFilter)
+      if (applied.warehouseFilter !== "all") qp.set("warehouse_id", applied.warehouseFilter)
       const res = await apiClient.get<UnratedTransaction[]>(`/finance/billing-transactions?${qp.toString()}`)
       return res.data ?? []
     },
@@ -483,13 +501,43 @@ export default function BillingPage() {
     chargeMix: [] as Array<{ charge_type: string; amount: number }>,
     sourceMix: [] as Array<{ source_type: string; amount: number }>,
   }
+  const unbilledRows = unbilledQuery.data ?? []
+  const unratedRows = unratedQuery.data ?? []
+  const allRows = allTransactionsQuery.data ?? []
+  const analyticsTransactions = allRows.filter(
+    (tx) => !["VOID", "UNRATED"].includes(tx.status || "") && Number(tx.amount || 0) > 0
+  )
+  const transactionRevenue = analyticsTransactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
+  const analyticsRevenue = summary.totalRevenue > 0 ? summary.totalRevenue : transactionRevenue
+  const analyticsBasis =
+    invoices.length > 0
+      ? "Invoice-based analytics"
+      : analyticsTransactions.length > 0
+        ? "Transaction-based preview"
+        : "No billing data in selected filter"
 
-  const sourceMixData = insights.sourceMix.map((row) => ({
+  const transactionSourceMix = Object.entries(
+    analyticsTransactions.reduce<Record<string, number>>((acc, tx) => {
+      const key = tx.source_type || "UNKNOWN"
+      acc[key] = (acc[key] || 0) + Number(tx.amount || 0)
+      return acc
+    }, {})
+  ).map(([source_type, amount]) => ({ source_type, amount }))
+
+  const transactionChargeMix = Object.entries(
+    analyticsTransactions.reduce<Record<string, number>>((acc, tx) => {
+      const key = tx.charge_type || "UNKNOWN"
+      acc[key] = (acc[key] || 0) + Number(tx.amount || 0)
+      return acc
+    }, {})
+  ).map(([charge_type, amount]) => ({ charge_type, amount }))
+
+  const sourceMixData = (insights.sourceMix.length > 0 ? insights.sourceMix : transactionSourceMix).map((row) => ({
     name: toLabel(row.source_type),
     amount: Number(row.amount || 0),
   }))
 
-  const chargeMixData = insights.chargeMix.map((row) => ({
+  const chargeMixData = (insights.chargeMix.length > 0 ? insights.chargeMix : transactionChargeMix).map((row) => ({
     name: toLabel(row.charge_type),
     amount: Number(row.amount || 0),
   }))
@@ -499,8 +547,8 @@ export default function BillingPage() {
     acc.push({ name: item.name, offset: previous, amount: item.amount })
     return acc
   }, [])
-  if (summary.totalRevenue > 0) {
-    waterfallData.push({ name: "Total", offset: 0, amount: summary.totalRevenue })
+  if (analyticsRevenue > 0) {
+    waterfallData.push({ name: "Total", offset: 0, amount: analyticsRevenue })
   }
 
   const todayTs = new Date().setHours(0, 0, 0, 0)
@@ -528,12 +576,25 @@ export default function BillingPage() {
   })
   const agingData = Object.entries(agingBuckets).map(([name, count]) => ({ name, count }))
 
-  const clientRollup = invoices.reduce<Record<string, { count: number; amount: number; pending: number }>>((acc, row) => {
-    const key = row.client_name || "Unknown"
+  const clientRollupSource =
+    invoices.length > 0
+      ? invoices.map((row) => ({
+          client: row.client_name,
+          amount: Number(row.total_amount || 0),
+          pending: Number(row.balance || 0),
+        }))
+      : analyticsTransactions.map((row) => ({
+          client: row.client_name,
+          amount: Number(row.amount || 0),
+          pending: 0,
+        }))
+
+  const clientRollup = clientRollupSource.reduce<Record<string, { count: number; amount: number; pending: number }>>((acc, row) => {
+    const key = row.client || "Unknown"
     if (!acc[key]) acc[key] = { count: 0, amount: 0, pending: 0 }
     acc[key].count += 1
-    acc[key].amount += Number(row.total_amount || 0)
-    acc[key].pending += Number(row.balance || 0)
+    acc[key].amount += row.amount
+    acc[key].pending += row.pending
     return acc
   }, {})
 
@@ -547,13 +608,26 @@ export default function BillingPage() {
     .sort((a, b) => b.pending - a.pending)
     .slice(0, 6)
 
-  const trendMap = invoices.reduce<Record<string, { invoiced: number; collected: number }>>((acc, row) => {
-    const date = new Date(row.invoice_date)
+  const trendSource =
+    invoices.length > 0
+      ? invoices.map((row) => ({
+          date: row.invoice_date,
+          invoiced: Number(row.total_amount || 0),
+          collected: Number(row.paid_amount || 0),
+        }))
+      : analyticsTransactions.map((row) => ({
+          date: row.event_date,
+          invoiced: Number(row.amount || 0),
+          collected: 0,
+        }))
+
+  const trendMap = trendSource.reduce<Record<string, { invoiced: number; collected: number }>>((acc, row) => {
+    const date = new Date(row.date)
     if (Number.isNaN(date.getTime())) return acc
     const key = date.toLocaleString("en-US", { month: "short", year: "2-digit" })
     if (!acc[key]) acc[key] = { invoiced: 0, collected: 0 }
-    acc[key].invoiced += Number(row.total_amount || 0)
-    acc[key].collected += Number(row.paid_amount || 0)
+    acc[key].invoiced += row.invoiced
+    acc[key].collected += row.collected
     return acc
   }, {})
   const trendData = Object.entries(trendMap).map(([period, row]) => ({ period, ...row }))
@@ -574,12 +648,30 @@ export default function BillingPage() {
   }
 
   const overdueCount = invoices.filter((bill) => bill.status === "OVERDUE").length
-  const unbilledRows = unbilledQuery.data ?? []
-  const unratedRows = unratedQuery.data ?? []
-  const allRows = allTransactionsQuery.data ?? []
+  const activeBillingProfiles = (billingProfilesQuery.data ?? []).filter((profile) => profile.is_active !== false)
+  const activeProfileClientIds = new Set(activeBillingProfiles.map((profile) => Number(profile.client_id)))
 
   const exceptionRows: ExceptionRow[] = (() => {
     const rows: ExceptionRow[] = []
+    const scopedClients =
+      applied.clientFilter === "all"
+        ? clients
+        : clients.filter((client) => String(client.id) === applied.clientFilter)
+
+    scopedClients.forEach((client) => {
+      if (activeProfileClientIds.has(Number(client.id))) return
+      rows.push({
+        id: `missing-profile-${client.id}`,
+        exceptionType: "Missing Billing Profile",
+        severity: "HIGH",
+        sourceRef: `CLIENT-${client.id}`,
+        client: client.client_name,
+        detectedOn: TODAY_ISO,
+        status: "OPEN",
+        owner: "Billing Ops",
+      })
+    })
+
     const duplicateMap = new Map<string, number>()
     allRows.forEach((tx) => {
       const key = `${tx.source_type}|${tx.source_doc_id ?? 0}|${tx.source_line_id ?? 0}|${tx.charge_type}|${tx.event_date?.slice(0, 10)}`
@@ -656,6 +748,16 @@ export default function BillingPage() {
   const openExceptionCount = exceptionDisplayRows.filter(
     (row) => row.status === "OPEN" || row.status === "REVIEW"
   ).length
+  const activeProfileCount = activeBillingProfiles.length
+  const clientsMissingProfile = Math.max(0, clients.length - activeProfileCount)
+  const previewReady = Boolean(preview && preview.unratedTransactionCount === 0 && openExceptionCount === 0 && preview.billableTransactions > 0)
+  const readinessCards = [
+    { label: "Active Profiles", value: activeProfileCount, tone: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200" },
+    { label: "Missing Profiles", value: clientsMissingProfile, tone: clientsMissingProfile > 0 ? "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" },
+    { label: "Unrated Tx", value: unratedRows.length, tone: unratedRows.length > 0 ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-200" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" },
+    { label: "Open Exceptions", value: openExceptionCount, tone: openExceptionCount > 0 ? "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" },
+    { label: "Preview Status", value: previewReady ? "Ready" : preview ? "Review" : "Pending", tone: previewReady ? "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+  ]
 
   const openExceptionDialog = (row: ExceptionRow, action: ExceptionAction) => {
     const previous = exceptionActions[row.id]
@@ -767,14 +869,49 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">Billing & Finance</h1>
-          <p className="mt-1 text-slate-500 dark:text-slate-400">Analytics Layer</p>
+          <p className="mt-1 text-slate-500 dark:text-slate-400">Billing operations and revenue analytics</p>
         </div>
         <Badge className="bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200">Run preview before generation</Badge>
       </div>
 
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+        {readinessCards.map((card) => (
+          <Card key={card.label}>
+            <CardContent className="pt-5">
+              <p className="text-xs text-slate-500 dark:text-slate-400">{card.label}</p>
+              <p className={`mt-2 inline-flex rounded-md px-2 py-1 text-xl font-semibold ${card.tone}`}>{card.value}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          { key: "operations", label: "Operations" },
+          { key: "preview", label: "Preview" },
+          { key: "exceptions", label: "Exceptions" },
+          { key: "analytics", label: "Analytics" },
+        ].map((section) => (
+          <Button
+            key={section.key}
+            variant={pageSection === section.key ? "default" : "outline"}
+            size="sm"
+            className={pageSection === section.key ? "bg-slate-950 text-white hover:bg-slate-900" : ""}
+            onClick={() => {
+              setPageSection(section.key as typeof pageSection)
+              if (section.key === "exceptions") setWorkspaceTab("exceptions")
+            }}
+          >
+            {section.label}
+          </Button>
+        ))}
+      </div>
+
+      {pageSection === "operations" ? (
+      <>
       <Card>
         <CardHeader>
           <CardTitle>Billing Profile Setup</CardTitle>
@@ -1082,7 +1219,10 @@ export default function BillingPage() {
           </div>
         </CardContent>
       </Card>
+      </>
+      ) : null}
 
+      {pageSection === "preview" ? (
       <Card>
         <CardHeader>
           <CardTitle>Billing Run Preview</CardTitle>
@@ -1144,16 +1284,37 @@ export default function BillingPage() {
           )}
         </CardContent>
       </Card>
+      ) : null}
 
+      {pageSection === "analytics" ? (
+      <>
+      <Card className="border-blue-100 bg-blue-50/60 dark:border-blue-900/50 dark:bg-blue-950/20">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div>
+            <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">{analyticsBasis}</p>
+            <p className="text-xs text-blue-700 dark:text-blue-200">
+              Showing data for {applied.dateFrom} to {applied.dateTo}
+              {applied.clientFilter !== "all" ? " with the selected client filter" : ""}
+              {applied.warehouseFilter !== "all" ? " and warehouse filter" : ""}.
+            </p>
+          </div>
+          <Badge className="bg-white text-blue-700 dark:bg-blue-900 dark:text-blue-100">
+            {invoices.length > 0 ? `${invoices.length} invoices` : `${analyticsTransactions.length} billable transactions`}
+          </Badge>
+        </CardContent>
+      </Card>
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Total Revenue</p><p className="text-2xl font-semibold">{asInr(summary.totalRevenue)}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">{invoices.length > 0 ? "Total Revenue" : "Billable Value"}</p><p className="text-2xl font-semibold">{asInr(analyticsRevenue)}</p></CardContent></Card>
         <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Collected</p><p className="text-2xl font-semibold">{asInr(summary.totalPaid)}</p></CardContent></Card>
         <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Collection Rate</p><p className="text-2xl font-semibold">{insights.collectionEfficiencyPct.toFixed(1)}%</p></CardContent></Card>
-        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Avg Invoice</p><p className="text-2xl font-semibold">{asInr(insights.avgInvoiceValue)}</p></CardContent></Card>
+        <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">{invoices.length > 0 ? "Avg Invoice" : "Avg Transaction"}</p><p className="text-2xl font-semibold">{asInr(invoices.length > 0 ? insights.avgInvoiceValue : analyticsTransactions.length ? analyticsRevenue / analyticsTransactions.length : 0)}</p></CardContent></Card>
         <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Days to Due</p><p className="text-2xl font-semibold">{avgDaysToDue}</p></CardContent></Card>
         <Card><CardContent className="pt-5"><p className="text-xs text-slate-500 dark:text-slate-400">Overdue Risk</p><p className="text-2xl font-semibold">{insights.overdueSharePct.toFixed(1)}%</p></CardContent></Card>
       </div>
+      </>
+      ) : null}
 
+      {pageSection === "exceptions" ? (
       <Card>
         <CardHeader>
           <CardTitle>Unbilled Activities / Billing Exceptions</CardTitle>
@@ -1342,7 +1503,10 @@ export default function BillingPage() {
           ) : null}
         </CardContent>
       </Card>
+      ) : null}
 
+      {pageSection === "analytics" ? (
+      <>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Revenue by Source</CardTitle></CardHeader>
@@ -1354,7 +1518,7 @@ export default function BillingPage() {
                 <BarChart data={sourceMixData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(value) => `?${value}`} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(value) => asInr(Number(value))} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(value: number | string | undefined) => asInr(Number(value ?? 0))} />
                   <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
                     {sourceMixData.map((entry, index) => <Cell key={entry.name} fill={colors[index % colors.length]} />)}
@@ -1395,7 +1559,7 @@ export default function BillingPage() {
                 <BarChart data={waterfallData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(value) => `?${value}`} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(value) => asInr(Number(value))} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(value: number | string | undefined) => asInr(Number(value ?? 0))} />
                   <Bar dataKey="offset" stackId="stack" fill="transparent" />
                   <Bar dataKey="amount" stackId="stack" radius={[4, 4, 0, 0]}>
@@ -1454,7 +1618,7 @@ export default function BillingPage() {
                 <ScatterChart margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
                   <CartesianGrid />
                   <XAxis type="number" dataKey="x" name="Invoices" allowDecimals={false} tick={{ fontSize: 10 }} />
-                  <YAxis type="number" dataKey="y" name="Revenue" tickFormatter={(value) => `?${value}`} tick={{ fontSize: 10 }} />
+                  <YAxis type="number" dataKey="y" name="Revenue" tickFormatter={(value) => asInr(Number(value))} tick={{ fontSize: 10 }} />
                   <ZAxis type="number" dataKey="z" range={[60, 320]} />
                   <Tooltip
                     cursor={{ strokeDasharray: "3 3" }}
@@ -1545,7 +1709,7 @@ export default function BillingPage() {
                 <LineChart data={trendData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="period" tick={{ fontSize: 10 }} />
-                  <YAxis tickFormatter={(value) => `?${value}`} tick={{ fontSize: 10 }} />
+                  <YAxis tickFormatter={(value) => asInr(Number(value))} tick={{ fontSize: 10 }} />
                   <Tooltip formatter={(value: number | string | undefined) => asInr(Number(value ?? 0))} />
                   <Legend />
                   <Line type="monotone" dataKey="invoiced" stroke="#2563b0" strokeWidth={2} dot={false} />
@@ -1564,7 +1728,7 @@ export default function BillingPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={pendingByClientData} layout="vertical" margin={{ left: 16 }}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" tickFormatter={(value) => `?${value}`} tick={{ fontSize: 10 }} />
+                  <XAxis type="number" tickFormatter={(value) => asInr(Number(value))} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="client" width={120} tick={{ fontSize: 10 }} />
                   <Tooltip formatter={(value: number | string | undefined) => asInr(Number(value ?? 0))} />
                   <Bar dataKey="pending" radius={[0, 4, 4, 0]} fill="#7c3aed" />
@@ -1574,6 +1738,8 @@ export default function BillingPage() {
           </CardContent>
         </Card>
       </div>
+      </>
+      ) : null}
 
       <Dialog open={exceptionDialogOpen} onOpenChange={setExceptionDialogOpen}>
         <DialogContent className="sm:max-w-xl">

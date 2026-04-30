@@ -13,6 +13,7 @@ import { validateTenantSettings, type TenantSettingsShape } from "@/lib/policy/s
 
 const updateSchema = z.object({
   feature_flags: z.record(z.string(), z.boolean()).optional(),
+  workflow_policies: z.record(z.string(), z.unknown()).optional(),
   security_policies: z.record(z.string(), z.unknown()).optional(),
   mobile_policies: z.record(z.string(), z.unknown()).optional(),
   ui_branding: z.record(z.string(), z.unknown()).optional(),

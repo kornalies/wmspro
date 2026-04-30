@@ -21,6 +21,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const range = resolveDateRange(searchParams.get("from"), searchParams.get("to"))
     const limit = Math.min(Number(searchParams.get("limit") || 200), 500)
+    const userId = Number(searchParams.get("user_id") || 0)
+    const shiftId = Number(searchParams.get("shift_id") || 0)
+    const warehouseId = Number(searchParams.get("warehouse_id") || 0)
 
     const rowsResult = await query(
       `WITH base AS (
@@ -47,6 +50,9 @@ export async function GET(request: NextRequest) {
          LEFT JOIN labor_shifts sh ON sh.id = e.shift_id AND sh.company_id = e.company_id
          WHERE e.company_id = $1
            AND e.event_ts::date BETWEEN $2::date AND $3::date
+           AND ($5::int = 0 OR e.user_id = $5)
+           AND ($6::int = 0 OR e.shift_id = $6)
+           AND ($7::int = 0 OR COALESCE(e.warehouse_id, sh.warehouse_id) = $7)
        )
        SELECT
          id,
@@ -73,7 +79,7 @@ export async function GET(request: NextRequest) {
        FROM base
        ORDER BY severity DESC, performance_pct ASC, event_ts DESC
        LIMIT $4`,
-      [access.companyId, range.from, range.to, limit]
+      [access.companyId, range.from, range.to, limit, userId, shiftId, warehouseId]
     )
 
     const rows = rowsResult.rows as Array<{
@@ -127,9 +133,10 @@ export async function GET(request: NextRequest) {
        ) a ON a.shift_id = s.id
        WHERE s.company_id = $1
          AND s.is_active = true
+         AND ($4::int = 0 OR s.warehouse_id = $4)
        ORDER BY headcount_gap DESC, s.shift_name ASC
        LIMIT 20`,
-      [access.companyId, range.from, range.to]
+      [access.companyId, range.from, range.to, warehouseId]
     )
 
     return ok({

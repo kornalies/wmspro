@@ -7,21 +7,26 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  CreditCard,
   DollarSign,
   Download,
   Eye,
+  FileSpreadsheet,
   FileText,
   Loader2,
   Plus,
+  RotateCcw,
   Search,
   Send,
+  SlidersHorizontal,
   Trash2,
+  X,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
 import { handleError } from "@/lib/error-handler"
-import { exportInvoicePDF } from "@/lib/export-utils"
+import { exportInvoicePDF, exportInvoicesToExcel } from "@/lib/export-utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -77,7 +82,9 @@ type Invoice = {
   total_amount: number
   paid_amount: number
   balance: number
-  status: "DRAFT" | "FINALIZED" | "SENT" | "PAID" | "OVERDUE" | "VOID"
+  credit_note_total?: number
+  reversal_credit_total?: number
+  status: "DRAFT" | "FINALIZED" | "SENT" | "PAID" | "OVERDUE" | "VOID" | "REVERSED"
   items: {
     invoice_line_id?: number
     description: string
@@ -163,6 +170,14 @@ export function FinanceInvoices() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [warehouseFilter, setWarehouseFilter] = useState("all")
+  const [clientFilter, setClientFilter] = useState("all")
+  const [invoiceFrom, setInvoiceFrom] = useState("")
+  const [invoiceTo, setInvoiceTo] = useState("")
+  const [dueFrom, setDueFrom] = useState("")
+  const [dueTo, setDueTo] = useState("")
+  const [sortKey, setSortKey] = useState("invoice_date_desc")
+  const [page, setPage] = useState(1)
+  const [showAccounting, setShowAccounting] = useState(false)
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null)
   const [tbFromInput, setTbFromInput] = useState(fyStart)
   const [tbToInput, setTbToInput] = useState(todayIso)
@@ -185,6 +200,8 @@ export function FinanceInvoices() {
   const [noteDate, setNoteDate] = useState(todayIso)
   const [noteReason, setNoteReason] = useState("")
   const [noteLines, setNoteLines] = useState<NoteDraftLine[]>([])
+  const [reversalInvoice, setReversalInvoice] = useState<Invoice | null>(null)
+  const [reversalReason, setReversalReason] = useState("")
 
   const warehousesQuery = useQuery({
     queryKey: ["warehouses", "active"],
@@ -199,7 +216,7 @@ export function FinanceInvoices() {
     queryFn: async () => {
       const qp = new URLSearchParams()
       if (search) qp.set("search", search)
-      if (statusFilter && statusFilter !== "all") qp.set("status", statusFilter)
+      if (statusFilter && statusFilter !== "all" && statusFilter !== "PARTIAL") qp.set("status", statusFilter)
       if (warehouseFilter !== "all") qp.set("warehouse_id", warehouseFilter)
       const res = await apiClient.get<InvoicePayload>(`/finance/invoices${qp.toString() ? `?${qp.toString()}` : ""}`)
       return res.data
@@ -439,12 +456,63 @@ export function FinanceInvoices() {
     onError: (error) => handleError(error, "Failed to issue debit note"),
   })
 
+  const reverseInvoiceMutation = useMutation({
+    mutationFn: async () => {
+      if (!reversalInvoice) throw new Error("No invoice selected")
+      const lines = (reversalInvoice.items ?? []).map((item) => ({
+        ...(item.invoice_line_id ? { invoice_line_id: item.invoice_line_id } : {}),
+        description: `Invoice reversal - ${item.description}`,
+        quantity: Number(item.quantity || 0),
+        rate: Number(item.rate || 0),
+        tax_rate: Number(reversalInvoice.gst_rate || 18),
+      })).filter((line) => line.quantity > 0)
+
+      if (!lines.length) throw new Error("Invoice has no reversible lines")
+
+      return apiClient.post("/finance/credit-notes", {
+        invoice_id: reversalInvoice.id,
+        note_date: todayIso,
+        reason: `Invoice reversal: ${reversalReason.trim()}`,
+        lines,
+      })
+    },
+    onSuccess: () => {
+      toast.success("Invoice reversal credit note issued")
+      if (reversalInvoice) {
+        const reversedValue = Number(reversalInvoice.grand_total ?? reversalInvoice.total_amount ?? 0)
+        setViewInvoice((current) =>
+          current?.id === reversalInvoice.id
+            ? {
+                ...current,
+                status: "REVERSED",
+                credit_note_total: Math.max(Number(current.credit_note_total || 0), reversedValue),
+                reversal_credit_total: Math.max(Number(current.reversal_credit_total || 0), reversedValue),
+                balance: 0,
+              }
+            : current
+        )
+      }
+      setReversalInvoice(null)
+      setReversalReason("")
+      invoicesQuery.refetch()
+      trialBalanceQuery.refetch()
+      journalsQuery.refetch()
+      creditNotesQuery.refetch()
+    },
+    onError: (error) => handleError(error, "Failed to reverse invoice"),
+  })
+
   const payload = invoicesQuery.data
   const invoices = payload?.invoices ?? []
   const searchSuggestions = useMemo(
     () => invoices.flatMap((invoice) => [invoice.invoice_number, invoice.client_name]),
     [invoices]
   )
+  const clientOptions = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const invoice of invoices) map.set(invoice.client_id, invoice.client_name)
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
+  }, [invoices])
   const summary = payload?.summary ?? {
     totalRevenue: 0,
     totalPaid: 0,
@@ -453,6 +521,65 @@ export function FinanceInvoices() {
     totalInvoiceValue: 0,
     overdueCount: 0,
   }
+  const filteredInvoices = useMemo(() => {
+    const byDate = (value: string, from: string, to: string) => {
+      const date = value?.slice(0, 10)
+      if (from && date < from) return false
+      if (to && date > to) return false
+      return true
+    }
+
+    return invoices
+      .filter((invoice) => {
+        if (clientFilter !== "all" && String(invoice.client_id) !== clientFilter) return false
+        if (statusFilter === "PARTIAL" && !(Number(invoice.paid_amount) > 0 && Number(invoice.balance) > 0)) return false
+        if (!byDate(invoice.invoice_date, invoiceFrom, invoiceTo)) return false
+        if (!byDate(invoice.due_date, dueFrom, dueTo)) return false
+        return true
+      })
+      .sort((a, b) => {
+        const moneyA = Number(a.grand_total ?? a.total_amount ?? 0)
+        const moneyB = Number(b.grand_total ?? b.total_amount ?? 0)
+        const balanceA = Number(a.balance ?? 0)
+        const balanceB = Number(b.balance ?? 0)
+        switch (sortKey) {
+          case "invoice_date_asc":
+            return a.invoice_date.localeCompare(b.invoice_date)
+          case "due_date_asc":
+            return a.due_date.localeCompare(b.due_date)
+          case "due_date_desc":
+            return b.due_date.localeCompare(a.due_date)
+          case "value_desc":
+            return moneyB - moneyA
+          case "balance_desc":
+            return balanceB - balanceA
+          case "status_asc":
+            return a.status.localeCompare(b.status)
+          case "invoice_date_desc":
+          default:
+            return b.invoice_date.localeCompare(a.invoice_date)
+        }
+      })
+  }, [clientFilter, dueFrom, dueTo, invoiceFrom, invoiceTo, invoices, sortKey])
+
+  const pageSize = 10
+  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pagedInvoices = filteredInvoices.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const statusChips = [
+    { key: "all", label: "All", count: invoices.length },
+    { key: "DRAFT", label: "Draft", count: invoices.filter((invoice) => invoice.status === "DRAFT").length },
+    { key: "SENT", label: "Finalized", count: invoices.filter((invoice) => invoice.status === "SENT" || invoice.status === "FINALIZED").length },
+    { key: "PAID", label: "Paid", count: invoices.filter((invoice) => invoice.status === "PAID").length },
+    { key: "PARTIAL", label: "Partially Paid", count: invoices.filter((invoice) => Number(invoice.paid_amount) > 0 && Number(invoice.balance) > 0).length },
+    { key: "OVERDUE", label: "Overdue", count: invoices.filter((invoice) => invoice.status === "OVERDUE").length },
+    { key: "REVERSED", label: "Reversed", count: invoices.filter((invoice) => invoice.status === "REVERSED").length },
+  ]
+
+  useEffect(() => {
+    setPage(1)
+  }, [clientFilter, dueFrom, dueTo, invoiceFrom, invoiceTo, search, sortKey, statusFilter, warehouseFilter])
+
   const handleDownloadPDF = (invoice: Invoice) => {
     try {
       exportInvoicePDF(invoice)
@@ -469,6 +596,8 @@ export function FinanceInvoices() {
         return <Send className="h-4 w-4" />
       case "OVERDUE":
         return <AlertCircle className="h-4 w-4" />
+      case "REVERSED":
+        return <RotateCcw className="h-4 w-4" />
       case "DRAFT":
         return <FileText className="h-4 w-4" />
       default:
@@ -482,6 +611,7 @@ export function FinanceInvoices() {
       SENT: "bg-blue-100 text-blue-800",
       FINALIZED: "bg-indigo-100 text-indigo-800",
       OVERDUE: "bg-red-100 text-red-800",
+      REVERSED: "bg-red-100 text-red-800",
       DRAFT: "bg-gray-100 text-gray-800",
       VOID: "bg-gray-100 text-gray-600",
     }
@@ -509,7 +639,80 @@ export function FinanceInvoices() {
     })
   }
 
-  const money = (value: number) => `Rs ${Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+  const formatDate = (value?: string) => {
+    if (!value) return "-"
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return value
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+  }
+
+  const money = (value: number) => `INR ${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+
+  const compactMoney = (value: number) => {
+    const amount = Number(value || 0)
+    if (Math.abs(amount) >= 100000) return `INR ${(amount / 100000).toFixed(1)}L`
+    if (Math.abs(amount) >= 1000) return `INR ${(amount / 1000).toFixed(1)}k`
+    return money(amount)
+  }
+
+  const dueHealth = (invoice: Invoice) => {
+    if (invoice.status === "PAID" || Number(invoice.balance || 0) <= 0) {
+      if (invoice.status === "REVERSED") return <Badge className="bg-red-100 text-red-800">Reversed</Badge>
+      return <Badge className="bg-green-100 text-green-800">Paid</Badge>
+    }
+    const due = new Date(invoice.due_date)
+    if (Number.isNaN(due.getTime())) return <Badge variant="outline">No due date</Badge>
+    const days = Math.ceil((due.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    if (days < 0) return <Badge className="bg-red-100 text-red-800">Overdue by {Math.abs(days)}d</Badge>
+    if (days <= 7) return <Badge className="bg-amber-100 text-amber-800">Due in {days}d</Badge>
+    return <Badge className="bg-slate-100 text-slate-700">Due in {days}d</Badge>
+  }
+
+  const openPaymentDialog = (invoice: Invoice) => {
+    setPaymentInvoice(invoice)
+    setPaymentAmount(String(Number(invoice.balance)))
+    setPaymentDate(new Date().toISOString().slice(0, 10))
+    setPaymentMode("BANK_TRANSFER")
+    setPaymentRef("")
+    setPaymentNotes("")
+  }
+
+  const clearInvoiceFilters = () => {
+    setSearchInput("")
+    setSearch("")
+    setStatusFilter("all")
+    setWarehouseFilter("all")
+    setClientFilter("all")
+    setInvoiceFrom("")
+    setInvoiceTo("")
+    setDueFrom("")
+    setDueTo("")
+    setSortKey("invoice_date_desc")
+  }
+
+  const creditNoteTotal = (invoice?: Invoice | null) => {
+    if (!invoice) return 0
+    if (viewInvoice?.id === invoice.id && (creditNotesQuery.data ?? []).length > 0) {
+      return (creditNotesQuery.data ?? []).reduce((sum, note) => sum + Number(note.grand_total || 0), 0)
+    }
+    return Number(invoice.credit_note_total || 0)
+  }
+
+  const canReverseInvoice = (invoice: Invoice, creditTotal = 0) => {
+    if (invoice.status === "DRAFT" || invoice.status === "VOID" || invoice.status === "REVERSED") return false
+    const invoiceValue = Number(invoice.grand_total ?? invoice.total_amount ?? 0)
+    return invoiceValue > 0 && creditTotal + 0.01 < invoiceValue
+  }
+
+  const openReversalDialog = (invoice: Invoice) => {
+    const existingCredit = viewInvoice?.id === invoice.id ? creditNoteTotal(invoice) : 0
+    if (!canReverseInvoice(invoice, existingCredit)) {
+      toast.error(invoice.status === "DRAFT" ? "Finalize the invoice before reversal" : "Invoice is already fully reversed or not reversible")
+      return
+    }
+    setReversalInvoice(invoice)
+    setReversalReason("")
+  }
 
   const initializeNoteLines = (invoice: Invoice) => {
     const mapped = (invoice.items ?? []).map((item, idx) => ({
@@ -558,15 +761,19 @@ export function FinanceInvoices() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Invoices</h1>
-          <p className="mt-1 text-gray-500">Generate and track client invoices</p>
+          <h1 className="text-3xl font-bold">Invoice Management</h1>
+          <p className="mt-1 text-gray-500">Generate, collect, reconcile, and track client invoices.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => exportInvoicesToExcel(filteredInvoices)}>
+            <FileSpreadsheet className="mr-2 h-4 w-4" />
+            Export
+          </Button>
           <Button variant="outline" onClick={() => setIsJournalOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
-            Post Journal Voucher
+            Journal Voucher
           </Button>
           <Button
             className="bg-blue-600 hover:bg-blue-700"
@@ -586,8 +793,8 @@ export function FinanceInvoices() {
               <DollarSign className="h-6 w-6 text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total Revenue</p>
-              <p className="text-2xl font-bold">{`Rs ${(summary.totalRevenue / 1000).toFixed(0)}k`}</p>
+              <p className="text-sm text-gray-600">Invoice Value</p>
+              <p className="text-2xl font-bold">{compactMoney(summary.totalInvoiceValue)}</p>
             </div>
           </div>
         </div>
@@ -597,8 +804,8 @@ export function FinanceInvoices() {
               <CheckCircle2 className="h-6 w-6 text-green-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Paid</p>
-              <p className="text-2xl font-bold">{`Rs ${(summary.totalPaid / 1000).toFixed(0)}k`}</p>
+              <p className="text-sm text-gray-600">Collected</p>
+              <p className="text-2xl font-bold">{compactMoney(summary.totalPaid)}</p>
             </div>
           </div>
         </div>
@@ -609,7 +816,7 @@ export function FinanceInvoices() {
             </div>
             <div>
               <p className="text-sm text-gray-600">Outstanding</p>
-              <p className="text-2xl font-bold">{`Rs ${(summary.totalOutstanding / 1000).toFixed(0)}k`}</p>
+              <p className="text-2xl font-bold">{compactMoney(summary.totalOutstanding)}</p>
             </div>
           </div>
         </div>
@@ -630,8 +837,8 @@ export function FinanceInvoices() {
               <FileText className="h-6 w-6 text-violet-700" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">GST Tax</p>
-              <p className="text-2xl font-bold">{`₹ ${(summary.totalTax / 1000).toFixed(0)}k`}</p>
+              <p className="text-sm text-gray-600">Drafts</p>
+              <p className="text-2xl font-bold">{invoices.filter((invoice) => invoice.status === "DRAFT").length}</p>
             </div>
           </div>
         </div>
@@ -641,14 +848,29 @@ export function FinanceInvoices() {
               <DollarSign className="h-6 w-6 text-indigo-700" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Invoice Value</p>
-              <p className="text-2xl font-bold">{`₹ ${(summary.totalInvoiceValue / 1000).toFixed(0)}k`}</p>
+              <p className="text-sm text-gray-600">GST</p>
+              <p className="text-2xl font-bold">{compactMoney(summary.totalTax)}</p>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-4">
+      <div className="rounded-lg border bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {statusChips.map((chip) => (
+            <Button
+              key={chip.key}
+              variant={statusFilter === chip.key ? "default" : "outline"}
+              className={statusFilter === chip.key ? "bg-slate-950 text-white hover:bg-slate-900" : ""}
+              onClick={() => setStatusFilter(chip.key)}
+            >
+              {chip.label}
+              <span className="ml-2 rounded-full bg-white/20 px-1.5 text-xs">{chip.count}</span>
+            </Button>
+          ))}
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_220px_220px_180px]">
         <div className="flex max-w-md flex-1 gap-2">
           <TypeaheadInput
             value={searchInput}
@@ -661,22 +883,20 @@ export function FinanceInvoices() {
           </Button>
         </div>
 
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[200px]">
-            <SelectValue />
+        <Select value={clientFilter} onValueChange={setClientFilter}>
+          <SelectTrigger>
+            <SelectValue placeholder="All clients" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="DRAFT">Draft</SelectItem>
-            <SelectItem value="SENT">Sent</SelectItem>
-            <SelectItem value="PAID">Paid</SelectItem>
-            <SelectItem value="OVERDUE">Overdue</SelectItem>
-            <SelectItem value="VOID">Void</SelectItem>
+            <SelectItem value="all">All clients</SelectItem>
+            {clientOptions.map(([id, name]) => (
+              <SelectItem key={id} value={String(id)}>{name}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
         <Select value={warehouseFilter} onValueChange={setWarehouseFilter}>
-          <SelectTrigger className="w-[260px]">
+          <SelectTrigger>
             <SelectValue placeholder="All Warehouses" />
           </SelectTrigger>
           <SelectContent>
@@ -688,9 +908,51 @@ export function FinanceInvoices() {
             ))}
           </SelectContent>
         </Select>
+
+        <Select value={sortKey} onValueChange={setSortKey}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="invoice_date_desc">Invoice date newest</SelectItem>
+            <SelectItem value="invoice_date_asc">Invoice date oldest</SelectItem>
+            <SelectItem value="due_date_asc">Due date earliest</SelectItem>
+            <SelectItem value="due_date_desc">Due date latest</SelectItem>
+            <SelectItem value="value_desc">Invoice value high</SelectItem>
+            <SelectItem value="balance_desc">Balance high</SelectItem>
+            <SelectItem value="status_asc">Status A-Z</SelectItem>
+          </SelectContent>
+        </Select>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Input type="date" value={invoiceFrom} onChange={(e) => setInvoiceFrom(e.target.value)} aria-label="Invoice from date" />
+            <Input type="date" value={invoiceTo} onChange={(e) => setInvoiceTo(e.target.value)} aria-label="Invoice to date" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Input type="date" value={dueFrom} onChange={(e) => setDueFrom(e.target.value)} aria-label="Due from date" />
+            <Input type="date" value={dueTo} onChange={(e) => setDueTo(e.target.value)} aria-label="Due to date" />
+          </div>
+          <Button variant="outline" onClick={clearInvoiceFilters}>
+            <X className="mr-2 h-4 w-4" /> Clear
+          </Button>
+        </div>
       </div>
 
-      <div className="rounded-lg border bg-white shadow">
+      <div className="rounded-lg border bg-white shadow-sm">
+        <div className="flex flex-col gap-2 border-b px-4 py-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Invoice Register</h2>
+            <p className="text-sm text-gray-500">
+              Showing {filteredInvoices.length ? `${(safePage - 1) * pageSize + 1}-${Math.min(safePage * pageSize, filteredInvoices.length)}` : "0"} of {filteredInvoices.length} invoices
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <SlidersHorizontal className="h-4 w-4" />
+            Amount columns are right aligned for reconciliation.
+          </div>
+        </div>
         {invoicesQuery.isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -718,7 +980,7 @@ export function FinanceInvoices() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {invoices.map((invoice) => (
+                  {pagedInvoices.map((invoice) => (
                     <TableRow key={invoice.id} className="hover:bg-gray-50">
                       <TableCell className="font-mono font-medium">{invoice.invoice_number}</TableCell>
                       <TableCell>{invoice.client_name}</TableCell>
@@ -728,11 +990,14 @@ export function FinanceInvoices() {
                           {invoice.billing_period}
                         </div>
                       </TableCell>
-                      <TableCell>{invoice.invoice_date}</TableCell>
+                      <TableCell>{formatDate(invoice.invoice_date)}</TableCell>
                       <TableCell>
-                        <span className={invoice.status === "OVERDUE" ? "font-medium text-red-600" : ""}>
-                          {invoice.due_date}
-                        </span>
+                        <div className="space-y-1">
+                          <span className={invoice.status === "OVERDUE" ? "font-medium text-red-600" : ""}>
+                            {formatDate(invoice.due_date)}
+                          </span>
+                          <div>{dueHealth(invoice)}</div>
+                        </div>
                       </TableCell>
                       <TableCell>{formatDateTime(invoice.created_at)}</TableCell>
                       <TableCell>{invoice.created_by_name || "-"}</TableCell>
@@ -761,15 +1026,10 @@ export function FinanceInvoices() {
                               className="text-emerald-700"
                               title="Record Payment"
                               onClick={() => {
-                                setPaymentInvoice(invoice)
-                                setPaymentAmount(String(Number(invoice.balance)))
-                                setPaymentDate(new Date().toISOString().slice(0, 10))
-                                setPaymentMode("BANK_TRANSFER")
-                                setPaymentRef("")
-                                setPaymentNotes("")
+                                openPaymentDialog(invoice)
                               }}
                             >
-                              Pay
+                              <CreditCard className="h-4 w-4" />
                             </Button>
                           )}
                           {invoice.status !== "PAID" && (
@@ -800,13 +1060,46 @@ export function FinanceInvoices() {
                       </TableCell>
                     </TableRow>
                   ))}
+                  {!pagedInvoices.length && (
+                    <TableRow>
+                      <TableCell colSpan={14}>
+                        <div className="flex flex-col items-center justify-center py-12 text-center">
+                          <FileText className="h-10 w-10 text-gray-300" />
+                          <h3 className="mt-3 font-semibold text-gray-900">No invoices found</h3>
+                          <p className="mt-1 text-sm text-gray-500">Clear filters or generate invoice drafts for the selected period.</p>
+                          <Button className="mt-4 bg-blue-600" onClick={() => generateInvoiceMutation.mutate()}>
+                            <FileText className="mr-2 h-4 w-4" /> Generate Invoice
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
           </div>
         )}
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <Button variant="outline" disabled={safePage <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))}>Previous</Button>
+          <span className="text-sm text-gray-500">Page {safePage} of {totalPages}</span>
+          <Button variant="outline" disabled={safePage >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}>Next</Button>
+        </div>
       </div>
 
+      <div className="rounded-lg border bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Accounting Workspace</h2>
+            <p className="text-sm text-gray-500">Trial balance and journals are available when you need ledger context.</p>
+          </div>
+          <Button variant="outline" onClick={() => setShowAccounting((value) => !value)}>
+            {showAccounting ? "Hide Accounting" : "Show Accounting"}
+          </Button>
+        </div>
+      </div>
+
+      {showAccounting && (
+      <>
       <div className="rounded-lg border bg-white shadow">
         <div className="border-b bg-gray-50 px-4 py-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -938,6 +1231,8 @@ export function FinanceInvoices() {
           </div>
         )}
       </div>
+      </>
+      )}
 
       <Dialog open={isJournalOpen} onOpenChange={setIsJournalOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
@@ -1157,6 +1452,59 @@ export function FinanceInvoices() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={Boolean(reversalInvoice)} onOpenChange={(open) => !open && setReversalInvoice(null)}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Reverse Invoice</DialogTitle>
+          </DialogHeader>
+          {reversalInvoice && (
+            <div className="space-y-4 text-sm">
+              <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="font-semibold text-red-900">{reversalInvoice.invoice_number}</p>
+                <p className="mt-1 text-red-800">
+                  This will create a full credit note for {money(Number(reversalInvoice.grand_total ?? reversalInvoice.total_amount))}.
+                  The original invoice remains available for audit history.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-gray-500">Client</p>
+                  <p className="font-medium">{reversalInvoice.client_name}</p>
+                </div>
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-gray-500">Current Balance</p>
+                  <p className="font-medium">{money(Number(reversalInvoice.balance))}</p>
+                </div>
+              </div>
+              <div>
+                <p className="mb-1 text-xs text-gray-500">Reversal reason *</p>
+                <Input
+                  value={reversalReason}
+                  onChange={(e) => setReversalReason(e.target.value)}
+                  placeholder="Example: duplicate invoice, wrong billing period, client cancellation"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setReversalInvoice(null)}>Cancel</Button>
+                <Button
+                  className="bg-red-600 hover:bg-red-700"
+                  disabled={reverseInvoiceMutation.isPending}
+                  onClick={() => {
+                    if (reversalReason.trim().length < 5) {
+                      toast.error("Enter a clear reversal reason")
+                      return
+                    }
+                    reverseInvoiceMutation.mutate()
+                  }}
+                >
+                  {reverseInvoiceMutation.isPending ? "Reversing..." : "Create Reversal Credit Note"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={Boolean(viewInvoice)}
         onOpenChange={(open) => {
@@ -1257,12 +1605,27 @@ export function FinanceInvoices() {
                   <span className="text-gray-600">Balance</span>
                   <span className="font-semibold text-orange-700">{money(Number(viewInvoice.balance))}</span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Credit Notes</span>
+                  <span className="font-medium text-red-700">{money(creditNoteTotal(viewInvoice))}</span>
+                </div>
               </div>
 
               <div className="rounded-md border bg-white p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-gray-900">Credit / Debit Notes</p>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-red-700"
+                      disabled={creditNotesQuery.isLoading || !canReverseInvoice(viewInvoice, creditNoteTotal(viewInvoice))}
+                      onClick={() => openReversalDialog(viewInvoice)}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Reverse Invoice
+                    </Button>
                     <Button type="button" size="sm" variant="outline" onClick={() => openNoteForm("CREDIT")}>
                       Issue Credit Note
                     </Button>
@@ -1507,4 +1870,3 @@ export function FinanceInvoices() {
     </div>
   )
 }
-

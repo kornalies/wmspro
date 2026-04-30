@@ -44,7 +44,9 @@ type InvoiceRow = {
   total_amount: number
   paid_amount: number
   balance: number
-  status: "DRAFT" | "FINALIZED" | "SENT" | "PAID" | "OVERDUE" | "VOID"
+  credit_note_total?: number
+  reversal_credit_total?: number
+  status: "DRAFT" | "FINALIZED" | "SENT" | "PAID" | "OVERDUE" | "VOID" | "REVERSED"
   items: InvoiceItem[]
   payments?: Array<{
     id: number
@@ -179,7 +181,11 @@ export async function GET(request: NextRequest) {
          COALESCE(ih.taxable_amount, 0)::numeric AS total_amount,
          COALESCE(ih.paid_amount, 0)::numeric AS paid_amount,
          COALESCE(ih.balance_amount, 0)::numeric AS balance,
+         COALESCE(credit_notes.credit_note_total, 0)::numeric AS credit_note_total,
+         COALESCE(credit_notes.reversal_credit_total, 0)::numeric AS reversal_credit_total,
          CASE
+           WHEN COALESCE(credit_notes.reversal_credit_total, 0) >= COALESCE(ih.grand_total, 0)
+             AND COALESCE(ih.grand_total, 0) > 0 THEN 'REVERSED'
            WHEN ih.status = 'PAID' THEN 'PAID'
            WHEN ih.status = 'DRAFT' THEN 'DRAFT'
            WHEN ih.status = 'VOID' THEN 'VOID'
@@ -204,6 +210,15 @@ export async function GET(request: NextRequest) {
          ON co.id = ih.company_id
        LEFT JOIN tenant_settings ts
          ON ts.company_id = ih.company_id
+       LEFT JOIN LATERAL (
+         SELECT
+           COALESCE(SUM(cnh.grand_total), 0)::numeric AS credit_note_total,
+           COALESCE(SUM(cnh.grand_total) FILTER (WHERE cnh.reason ILIKE 'Invoice reversal:%'), 0)::numeric AS reversal_credit_total
+         FROM credit_note_header cnh
+         WHERE cnh.company_id = ih.company_id
+           AND cnh.invoice_id = ih.id
+           AND cnh.status <> 'VOID'
+       ) credit_notes ON true
        LEFT JOIN LATERAL (
          SELECT COALESCE(
            json_agg(
@@ -244,6 +259,8 @@ export async function GET(request: NextRequest) {
        WHERE ih.company_id = $1
          AND ($2::text IS NULL OR (
            CASE
+             WHEN COALESCE(credit_notes.reversal_credit_total, 0) >= COALESCE(ih.grand_total, 0)
+               AND COALESCE(ih.grand_total, 0) > 0 THEN 'REVERSED'
              WHEN ih.status = 'PAID' THEN 'PAID'
              WHEN ih.status = 'DRAFT' THEN 'DRAFT'
              WHEN ih.status = 'VOID' THEN 'VOID'
@@ -281,7 +298,7 @@ export async function GET(request: NextRequest) {
           : (row.ui_branding as Record<string, unknown> | null) || {}
       const labels = ((brandingRaw as { labels?: unknown }).labels as Record<string, unknown>) || {}
       const supplierName = String(
-        labels.supplier_legal_name || labels.supplier_name || row.tenant_company_name || "WMS Pro"
+        labels.supplier_legal_name || labels.supplier_name || row.tenant_company_name || "GWU WMS"
       )
       const supplierGstin = String(labels.supplier_gstin || labels.gstin || "")
       const supplierPan = String(labels.supplier_pan || labels.pan || "")

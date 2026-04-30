@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
 
     const serial = searchParams.get("serial")?.trim()
     const item = searchParams.get("item")?.trim()
+    const clientId = Number(searchParams.get("client_id") || 0)
     const fromZoneLayoutId = Number(searchParams.get("from_zone_layout_id") || 0)
 
     const where: string[] = ["ssn.warehouse_id = $1", "ssn.status = 'IN_STOCK'"]
@@ -66,6 +67,10 @@ export async function GET(request: NextRequest) {
       params.push(`%${item}%`)
       idx++
     }
+    if (clientId) {
+      where.push(`ssn.client_id = $${idx++}`)
+      params.push(clientId)
+    }
     if (fromZoneLayoutId) {
       where.push(`ssn.zone_layout_id = $${idx++}`)
       params.push(fromZoneLayoutId)
@@ -75,13 +80,19 @@ export async function GET(request: NextRequest) {
       `SELECT
         ssn.id,
         ssn.serial_number,
+        ssn.status,
         ssn.received_date,
+        (CURRENT_DATE - ssn.received_date::date) AS age_days,
         i.item_code,
         i.item_name,
+        c.client_name,
+        w.warehouse_name,
         ssn.zone_layout_id,
         COALESCE(ssn.bin_location, CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code), 'Unassigned') AS current_bin_location
       FROM stock_serial_numbers ssn
       JOIN items i ON i.id = ssn.item_id
+      JOIN clients c ON c.id = ssn.client_id
+      JOIN warehouses w ON w.id = ssn.warehouse_id
       LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id
       WHERE ${where.join(" AND ")}
       ORDER BY ssn.received_date ASC, ssn.id ASC

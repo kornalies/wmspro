@@ -6,6 +6,7 @@ import { fail, ok } from "@/lib/api-response"
 import { getUserAccessProfile } from "@/lib/rbac"
 import { canAccessPermissions, getRequiredPermissionsForPath } from "@/lib/route-permissions"
 import { syncInvoiceLedger } from "@/lib/finance-ledger"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -121,6 +122,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     const requiredPermissions = getRequiredPermissionsForPath("/dashboard")
     const access = await getUserAccessProfile(session.userId, session.role)
     const canViewDashboard = canAccessPermissions(
@@ -414,6 +416,8 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to fetch dashboard summary"
     return fail("SERVER_ERROR", message, 500)
   }

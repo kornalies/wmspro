@@ -9,9 +9,13 @@ import { handleError } from "@/lib/error-handler"
 
 type DOQueryParams = {
   page?: number
+  limit?: number
   status?: string
   search?: string
   warehouse_id?: string
+  client_id?: string
+  date_from?: string
+  date_to?: string
 }
 
 type DORef = number | string
@@ -60,9 +64,13 @@ type WorkflowStatusPayload = {
 function buildQuery(params: DOQueryParams) {
   const sp = new URLSearchParams()
   if (params.page) sp.set("page", String(params.page))
+  if (params.limit) sp.set("limit", String(params.limit))
   if (params.status && params.status !== "all") sp.set("status", params.status)
   if (params.search) sp.set("search", params.search)
   if (params.warehouse_id && params.warehouse_id !== "all") sp.set("warehouse_id", params.warehouse_id)
+  if (params.client_id && params.client_id !== "all") sp.set("client_id", params.client_id)
+  if (params.date_from) sp.set("date_from", params.date_from)
+  if (params.date_to) sp.set("date_to", params.date_to)
   return sp.toString()
 }
 

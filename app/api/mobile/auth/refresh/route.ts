@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { fail, ok } from "@/lib/api-response"
 import { signToken, verifyToken } from "@/lib/auth"
+import { securityTelemetry } from "@/lib/security-telemetry"
 
 const refreshSchema = z.object({
   refresh_token: z.string().min(10),
@@ -14,7 +15,12 @@ export async function POST(request: NextRequest) {
     const payload = refreshSchema.parse(await request.json())
     const session = await verifyToken(payload.refresh_token, { purpose: "refresh" })
     if (!session) {
+      securityTelemetry.onEvent("mobile_refresh_invalid_token")
       return fail("UNAUTHORIZED", "Invalid refresh token", 401)
+    }
+    if ((session.actorType ?? "").toLowerCase() !== "mobile") {
+      securityTelemetry.onEvent("mobile_auth_actor_scope_rejected", "route=/api/mobile/auth/refresh")
+      return fail("FORBIDDEN", "Token actor scope is not allowed for mobile auth refresh", 403)
     }
 
     const accessToken = await signToken(
@@ -25,6 +31,7 @@ export async function POST(request: NextRequest) {
         role: session.role,
         roles: session.roles || [session.role],
         permissions: session.permissions || [],
+        products: session.products || [],
         companyId: session.companyId,
         companyCode: session.companyCode,
         warehouseId: session.warehouseId,
@@ -40,6 +47,7 @@ export async function POST(request: NextRequest) {
         role: session.role,
         roles: session.roles || [session.role],
         permissions: session.permissions || [],
+        products: session.products || [],
         companyId: session.companyId,
         companyCode: session.companyCode,
         warehouseId: session.warehouseId,

@@ -2,7 +2,7 @@ import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
 
-import { hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
+import { guardPortalProductError, hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
 
 export async function GET(request: Request) {
   try {
@@ -39,6 +39,8 @@ export async function GET(request: Request) {
 
     return ok(result.rows)
   } catch (error: unknown) {
+    const productGuarded = guardPortalProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to fetch inventory"
     return fail("SERVER_ERROR", message, 500)
   }

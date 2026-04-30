@@ -7,11 +7,13 @@ import { fail, ok, paginated } from "@/lib/api-response"
 import { getDOStatusErrorMessage, normalizeDOStatus } from "@/lib/do-status"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
+import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "do.manage")
 
     const { searchParams } = new URL(request.url)
@@ -20,8 +22,13 @@ export async function GET(request: NextRequest) {
     const statusFilter = searchParams.get("status")
     const search = searchParams.get("search")
     const warehouseParam = searchParams.get("warehouse_id")
+    const clientParam = searchParams.get("client_id")
+    const dateFrom = searchParams.get("date_from")
+    const dateTo = searchParams.get("date_to")
     const requestedWarehouseId =
       warehouseParam && warehouseParam !== "all" ? Number(warehouseParam) : 0
+    const requestedClientId =
+      clientParam && clientParam !== "all" ? Number(clientParam) : 0
     const policy = await getEffectivePolicy(
       session.companyId,
       session.userId,
@@ -58,8 +65,21 @@ export async function GET(request: NextRequest) {
       where.push(`dh.status = $${idx++}`)
       params.push(normalizedStatus)
     }
+    if (requestedClientId) {
+      requireScope(policy, "client", requestedClientId)
+      where.push(`dh.client_id = $${idx++}`)
+      params.push(requestedClientId)
+    }
+    if (dateFrom) {
+      where.push(`dh.request_date >= $${idx++}::date`)
+      params.push(dateFrom)
+    }
+    if (dateTo) {
+      where.push(`dh.request_date <= $${idx++}::date`)
+      params.push(dateTo)
+    }
     if (search) {
-      where.push(`(dh.do_number ILIKE $${idx} OR c.client_name ILIKE $${idx})`)
+      where.push(`(dh.do_number ILIKE $${idx} OR c.client_name ILIKE $${idx} OR dh.invoice_no ILIKE $${idx})`)
       params.push(`%${search}%`)
       idx++
     }
@@ -128,6 +148,8 @@ export async function GET(request: NextRequest) {
       totalPages: Math.ceil(total / limit),
     })
   } catch (error: unknown) {
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to fetch DOs"
@@ -140,6 +162,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
+    await assertProductEnabled(session.companyId, "WMS")
     requirePermission(session, "do.manage")
 
     const body = await request.json()
@@ -303,6 +326,8 @@ export async function POST(request: NextRequest) {
     )
   } catch (error: unknown) {
     await dbClient.query("ROLLBACK")
+    const productGuarded = guardProductError(error)
+    if (productGuarded) return productGuarded
     const message = error instanceof Error ? error.message : "Failed to create DO"
     return fail("CREATE_FAILED", message, 400)
   } finally {

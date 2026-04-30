@@ -1,16 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { jwtVerify } from "jose"
-
-type TokenPayload = {
-  role?: string
-  permissions?: string[]
-}
-
-const jwtSecret = process.env.JWT_SECRET
-if (!jwtSecret) {
-  throw new Error("Missing JWT_SECRET environment variable")
-}
-const secret = new TextEncoder().encode(jwtSecret)
+import { verifyTokenWithoutSession, type TokenPayload } from "@/lib/auth"
+import { securityTelemetry } from "@/lib/security-telemetry"
 
 function getRequestId(request: NextRequest): string {
   const direct = request.headers.get("x-request-id")
@@ -38,11 +28,26 @@ function applyEnterpriseHeaders(response: NextResponse, requestId: string, reque
   return response
 }
 
-function applyApiCorsHeaders(response: NextResponse) {
-  response.headers.set("access-control-allow-origin", "*")
-  response.headers.set("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-  response.headers.set("access-control-allow-headers", "Authorization, Content-Type, X-Requested-With")
-  response.headers.set("access-control-max-age", "86400")
+function applyApiCorsHeaders(response: NextResponse, request: NextRequest) {
+  const configuredOrigins = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+  const localOrigins =
+    process.env.NODE_ENV === "production"
+      ? []
+      : ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"]
+  const allowedOrigins = new Set([...configuredOrigins, ...localOrigins])
+  const requestOrigin = request.headers.get("origin")
+
+  if (requestOrigin && allowedOrigins.has(requestOrigin)) {
+    response.headers.set("access-control-allow-origin", requestOrigin)
+    response.headers.set("vary", "Origin")
+    response.headers.set("access-control-allow-credentials", "true")
+    response.headers.set("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+    response.headers.set("access-control-allow-headers", "Authorization, Content-Type, X-Requested-With")
+    response.headers.set("access-control-max-age", "86400")
+  }
   return response
 }
 
@@ -56,15 +61,18 @@ function redirectWithHeaders(path: string, request: NextRequest, requestId: stri
   return applyEnterpriseHeaders(response, requestId, request)
 }
 
-async function getTokenPayload(request: NextRequest): Promise<TokenPayload | null> {
+async function getTokenPayload(
+  request: NextRequest
+): Promise<{ payload: TokenPayload | null; tokenState: "none" | "invalid" | "valid" }> {
   const token = request.cookies.get("token")?.value
-  if (!token) return null
+  if (!token) return { payload: null, tokenState: "none" }
 
   try {
-    const verified = await jwtVerify(token, secret)
-    return verified.payload as TokenPayload
+    const payload = await verifyTokenWithoutSession(token, { purpose: "access" })
+    if (!payload) return { payload: null, tokenState: "invalid" }
+    return { payload, tokenState: "valid" }
   } catch {
-    return null
+    return { payload: null, tokenState: "invalid" }
   }
 }
 
@@ -75,17 +83,29 @@ export default async function proxy(request: NextRequest) {
   if (path.startsWith("/api/")) {
     if (request.method === "OPTIONS") {
       const preflight = new NextResponse(null, { status: 204 })
-      return applyApiCorsHeaders(applyEnterpriseHeaders(preflight, requestId, request))
+      return applyApiCorsHeaders(applyEnterpriseHeaders(preflight, requestId, request), request)
     }
     const response = nextWithHeaders(requestId, request)
-    return applyApiCorsHeaders(response)
+    return applyApiCorsHeaders(response, request)
   }
 
-  const payload = await getTokenPayload(request)
+  const auth = await getTokenPayload(request)
+  const payload = auth.payload
 
   if (!payload) {
+    if (auth.tokenState === "invalid") {
+      securityTelemetry.onEvent("proxy_invalid_access_token", `path=${path}`)
+    }
     const loginUrl = new URL("/login", request.url)
     loginUrl.searchParams.set("next", path)
+    const response = NextResponse.redirect(loginUrl)
+    return applyEnterpriseHeaders(response, requestId, request)
+  }
+  if ((payload.actorType ?? "").toLowerCase() === "mobile") {
+    securityTelemetry.onEvent("proxy_mobile_actor_token_rejected", `path=${path}`)
+    const loginUrl = new URL("/login", request.url)
+    loginUrl.searchParams.set("next", path)
+    loginUrl.searchParams.set("error", "session_scope")
     const response = NextResponse.redirect(loginUrl)
     return applyEnterpriseHeaders(response, requestId, request)
   }
@@ -110,6 +130,22 @@ export default async function proxy(request: NextRequest) {
     path.startsWith("/labor") ||
     path.startsWith("/integrations") ||
     path.startsWith("/wes")
+  const isWmsProductPath = isInternalWmsPath || path.startsWith("/portal")
+  const isFreightPath = path.startsWith("/freight")
+  const tokenProducts = Array.isArray(payload.products)
+    ? payload.products.map((value) => String(value).trim().toUpperCase()).filter(Boolean)
+    : []
+  const hasWmsProduct = tokenProducts.length ? tokenProducts.includes("WMS") : true
+  const hasFreightProduct = tokenProducts.length ? tokenProducts.includes("FF") : false
+
+  if (isWmsProductPath && !hasWmsProduct) {
+    return redirectWithHeaders("/product-unavailable?product=WMS", request, requestId)
+  }
+
+  if (isFreightPath && !hasFreightProduct) {
+    return redirectWithHeaders("/product-unavailable?product=FF", request, requestId)
+  }
+
   if (isPortalOnlyRole && isInternalWmsPath) {
     return redirectWithHeaders("/portal", request, requestId)
   }
@@ -204,7 +240,6 @@ export default async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/api/:path*",
     "/dashboard/:path*",
     "/grn/:path*",
     "/do/:path*",
@@ -217,5 +252,6 @@ export const config = {
     "/integrations/:path*",
     "/wes/:path*",
     "/portal/:path*",
+    "/freight/:path*",
   ],
 }

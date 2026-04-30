@@ -12,6 +12,7 @@ type AuthUser = {
   role: string
   roles?: string[]
   permissions?: string[]
+  products?: string[]
   company_id: number
   company_code?: string
   company_name?: string
@@ -22,6 +23,7 @@ type LoginPayload = {
   company_code: string
   username: string
   password: string
+  requested_product?: "WMS" | "FF"
 }
 
 export function useMe() {
@@ -66,8 +68,10 @@ export function useSwitchCompany() {
         company_id: companyId,
       }),
     onSuccess: () => {
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== "auth",
+      })
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] })
-      queryClient.invalidateQueries({ queryKey: ["admin"] })
     },
   })
 }
@@ -85,12 +89,21 @@ export function useAuth() {
     return permissions.some((perm) => user.permissions?.includes(perm))
   }
 
+  const hasProduct = (product: string) => {
+    const normalized = product.trim().toUpperCase()
+    if (!normalized) return false
+    const products = user?.products?.map((p) => String(p).toUpperCase()) || []
+    if (!products.length) return normalized === "WMS"
+    return products.includes(normalized)
+  }
+
   return {
     user,
     isLoading,
     isAuthenticated: !!user && !isError,
     hasRole,
     hasPermission,
+    hasProduct,
     isAdmin: hasPermission(["admin.users.manage"]),
     canManage: hasPermission(["master.data.manage"]),
   }

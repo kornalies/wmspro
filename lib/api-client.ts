@@ -84,6 +84,13 @@ class APIClient {
     })
   }
 
+  patch<T>(endpoint: string, data?: unknown) {
+    return this.request<T>(endpoint, {
+      method: "PATCH",
+      body: data ? JSON.stringify(data) : undefined,
+    })
+  }
+
   delete<T>(endpoint: string) {
     return this.request<T>(endpoint, { method: "DELETE" })
   }

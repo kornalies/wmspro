@@ -18,6 +18,7 @@ export interface TokenPayload {
   role: string
   roles?: string[]
   permissions?: string[]
+  products?: string[]
   companyId: number
   companyCode?: string
   warehouseId?: number
@@ -93,8 +94,11 @@ export async function verifyToken(token: string, options?: VerifyTokenOptions): 
   }
 }
 
-export async function verifyTokenWithoutSession(token: string): Promise<TokenPayload | null> {
-  return verifyToken(token, { validateSession: false })
+export async function verifyTokenWithoutSession(
+  token: string,
+  options?: { purpose?: TokenPurpose }
+): Promise<TokenPayload | null> {
+  return verifyToken(token, { validateSession: false, purpose: options?.purpose })
 }
 
 export async function getSession(): Promise<TokenPayload | null> {

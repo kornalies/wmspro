@@ -4,7 +4,7 @@ import { query } from "@/lib/db"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireFeature, requirePolicyPermission } from "@/lib/policy/guards"
 
-import { hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
+import { guardPortalProductError, hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
 
 export async function GET(request: Request) {
   try {
@@ -64,6 +64,8 @@ export async function GET(request: Request) {
 
     return ok(invoices.rows)
   } catch (error: unknown) {
+    const productGuarded = guardPortalProductError(error)
+    if (productGuarded) return productGuarded
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     const message = error instanceof Error ? error.message : "Failed to fetch billing"
