@@ -1,6 +1,6 @@
 ﻿"use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Download, FileText, Loader2 } from "lucide-react"
 import { toast } from "sonner"
@@ -387,17 +387,6 @@ export default function BillingPage() {
   const selectedBillingProfile =
     (billingProfilesQuery.data ?? []).find((row) => String(row.client_id) === effectiveProfileClientId) ?? null
   const resolvedProfileForm = profileDraft ?? mapBillingProfileToForm(selectedBillingProfile)
-
-  useEffect(() => {
-    setDateFrom(THIRTY_DAYS_AGO_ISO)
-    setDateTo(TODAY_ISO)
-    setProfileClientId("")
-    setProfileDraft(null)
-    setClientFilter("all")
-    setWarehouseFilter("all")
-    setApplied({ dateFrom: THIRTY_DAYS_AGO_ISO, dateTo: TODAY_ISO, clientFilter: "all", warehouseFilter: "all" })
-    setPreview(null)
-  }, [companyKey])
 
   const unratedQuery = useQuery({
     queryKey: ["finance", "billing-transactions", "unrated", companyKey, applied],

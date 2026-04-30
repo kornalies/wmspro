@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
@@ -122,13 +122,13 @@ export default function TransferForm() {
   const initialFromZoneLayoutId = searchParams.get("from_zone_layout_id")?.trim() || "all"
 
   const [warehouseId, setWarehouseId] = useState(initialWarehouseId)
-  const [warehouseSearch, setWarehouseSearch] = useState("")
+  const [warehouseSearch, setWarehouseSearch] = useState<string | null>(null)
   const [serialFilter, setSerialFilter] = useState(initialSerialFilter)
   const [itemFilter, setItemFilter] = useState(initialItemFilter)
   const [clientSearch, setClientSearch] = useState("")
   const [clientId, setClientId] = useState("all")
   const [fromZoneLayoutId, setFromZoneLayoutId] = useState(initialFromZoneLayoutId)
-  const [fromBinSearch, setFromBinSearch] = useState("")
+  const [fromBinSearch, setFromBinSearch] = useState<string | null>(null)
   const [toZoneLayoutId, setToZoneLayoutId] = useState("")
   const [toBinSearch, setToBinSearch] = useState("")
   const [remarks, setRemarks] = useState("")
@@ -192,23 +192,22 @@ export default function TransferForm() {
   const warehouseSuggestions = useMemo(() => warehouses.map((warehouse) => warehouse.warehouse_name), [warehouses])
   const clientSuggestions = useMemo(() => clients.map(getClientLabel), [clients])
   const binSuggestions = useMemo(() => layouts.map(getBinLabel), [layouts])
+  const initialWarehouseLabel = useMemo(() => {
+    if (!initialWarehouseId) return ""
+    return warehouses.find((warehouse) => String(warehouse.id) === initialWarehouseId)?.warehouse_name ?? ""
+  }, [initialWarehouseId, warehouses])
+  const initialFromBinLabel = useMemo(() => {
+    if (!initialFromZoneLayoutId || initialFromZoneLayoutId === "all") return ""
+    const match = layouts.find((layout) => String(layout.id) === initialFromZoneLayoutId)
+    return match ? getBinLabel(match) : ""
+  }, [initialFromZoneLayoutId, layouts])
   const destinationBin = useMemo(
     () => layouts.find((layout) => String(layout.id) === toZoneLayoutId),
     [layouts, toZoneLayoutId]
   )
   const destinationBinLabel = destinationBin ? getBinLabel(destinationBin) : ""
-
-  useEffect(() => {
-    if (!initialWarehouseId || warehouseSearch || warehouses.length === 0) return
-    const match = warehouses.find((warehouse) => String(warehouse.id) === initialWarehouseId)
-    if (match) setWarehouseSearch(match.warehouse_name)
-  }, [initialWarehouseId, warehouseSearch, warehouses])
-
-  useEffect(() => {
-    if (!initialFromZoneLayoutId || initialFromZoneLayoutId === "all" || fromBinSearch || layouts.length === 0) return
-    const match = layouts.find((layout) => String(layout.id) === initialFromZoneLayoutId)
-    if (match) setFromBinSearch(getBinLabel(match))
-  }, [fromBinSearch, initialFromZoneLayoutId, layouts])
+  const warehouseSearchValue = warehouseSearch ?? initialWarehouseLabel
+  const fromBinSearchValue = fromBinSearch ?? initialFromBinLabel
 
   const resolveWarehouseId = (value: string) => {
     const normalized = value.trim().toLowerCase()
@@ -372,7 +371,7 @@ export default function TransferForm() {
           <div className="space-y-2">
             <Label>Warehouse *</Label>
             <TypeaheadInput
-              value={warehouseSearch}
+              value={warehouseSearchValue}
               onValueChange={(value) => {
                 setWarehouseSearch(value)
                 const nextWarehouseId = resolveWarehouseId(value)
@@ -391,7 +390,7 @@ export default function TransferForm() {
           <div className="space-y-2">
             <Label>From Bin</Label>
             <TypeaheadInput
-              value={fromBinSearch}
+              value={fromBinSearchValue}
               onValueChange={(value) => {
                 setFromBinSearch(value)
                 setFromZoneLayoutId(value.trim() ? resolveBinId(value) || "all" : "all")
