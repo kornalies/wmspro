@@ -29,6 +29,27 @@ jobs:
           ref: ${{ inputs.git_ref }}
           fetch-depth: 0
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Build release artifact
+        shell: bash
+        env:
+          NODE_ENV: production
+          JWT_SECRET: build-time-placeholder
+          DATABASE_URL: postgresql://wms:wms@localhost:5432/wms_build?sslmode=disable
+          WMS_COMPANY_CODE: GWU
+          WMS_USERNAME: wms_build
+          WMS_PASSWORD: wms_build_password
+        run: npm run build
+
       - name: Setup SSH key
         shell: bash
         run: |
@@ -41,7 +62,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=tar.gz --output=/tmp/wmspro-release.tar.gz HEAD
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=.next/cache \
+            --exclude=/tmp/wmspro-release.tar.gz \
+            -czf /tmp/wmspro-release.tar.gz .
 
       - name: Upload release archive
         shell: bash
@@ -81,12 +107,11 @@ jobs:
           fi
           chown -R wms:wms "\${RELEASE_DIR}"
           cd "\${RELEASE_DIR}"
-          npm ci
+          npm ci --omit=dev
           set -a
           source .env.production
           set +a
           npm run db:migrate
-          npm run build
           if [ -e "${PROD_APP_DIR}" ] && [ ! -L "${PROD_APP_DIR}" ]; then
             mv "${PROD_APP_DIR}" "\${BACKUP_ROOT}/current-before-\${RELEASE_ID}"
           fi
