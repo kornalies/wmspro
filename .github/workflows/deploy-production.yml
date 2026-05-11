@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           tar \
             --exclude=.git \
-            --exclude=node_modules \
+            --exclude=./node_modules \
             --exclude=.next/cache \
             --exclude=/tmp/wmspro-release.tar.gz \
             -czf /tmp/wmspro-release.tar.gz .
