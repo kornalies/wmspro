@@ -12,8 +12,21 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const mode = searchParams.get("mode") || "summary"
     const clientId = searchParams.get("client_id")
-    const whereClient = clientId && clientId !== "all" ? "AND ssn.client_id = $1" : ""
-    const params = clientId && clientId !== "all" ? [Number(clientId)] : []
+    const warehouseId = searchParams.get("warehouse_id")
+    const params: Array<number> = [session.companyId]
+    const filters = ["ssn.company_id = $1"]
+
+    if (clientId && clientId !== "all") {
+      params.push(Number(clientId))
+      filters.push(`ssn.client_id = $${params.length}`)
+    }
+
+    if (warehouseId && warehouseId !== "all") {
+      params.push(Number(warehouseId))
+      filters.push(`ssn.warehouse_id = $${params.length}`)
+    }
+
+    const whereClause = filters.join("\n          AND ")
 
     if (mode === "slow") {
       const result = await query(
@@ -25,11 +38,11 @@ export async function GET(request: NextRequest) {
           ssn.status,
           COALESCE(i.standard_mrp, 0)::numeric AS value
         FROM stock_serial_numbers ssn
-        JOIN items i ON i.id = ssn.item_id
-        JOIN clients c ON c.id = ssn.client_id
+        JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
+        JOIN clients c ON c.id = ssn.client_id AND c.company_id = ssn.company_id
         WHERE ssn.status = 'IN_STOCK'
           AND (CURRENT_DATE - ssn.received_date::date) > 60
-          ${whereClient}
+          AND ${whereClause}
         ORDER BY age_days DESC
         LIMIT 300`,
         params
@@ -46,11 +59,11 @@ export async function GET(request: NextRequest) {
         COUNT(*) FILTER (WHERE ssn.status = 'RESERVED')::int AS reserved,
         COUNT(*) FILTER (WHERE ssn.status = 'DISPATCHED')::int AS dispatched,
         COUNT(*)::int AS total,
-        (COUNT(*) * COALESCE(i.standard_mrp, 0))::numeric AS value
+        (COUNT(*) FILTER (WHERE ssn.status = 'IN_STOCK') * COALESCE(i.standard_mrp, 0))::numeric AS value
       FROM stock_serial_numbers ssn
-      JOIN clients c ON c.id = ssn.client_id
-      JOIN items i ON i.id = ssn.item_id
-      WHERE 1=1 ${whereClient}
+      JOIN clients c ON c.id = ssn.client_id AND c.company_id = ssn.company_id
+      JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
+      WHERE ${whereClause}
       GROUP BY c.client_name, i.item_name, i.standard_mrp
       ORDER BY c.client_name, i.item_name`,
       params

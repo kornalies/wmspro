@@ -196,9 +196,9 @@ export default function ReportsPage() {
   })
 
   const stockSummaryQuery = useQuery({
-    queryKey: ["reports", "stock-summary", applied.clientId],
+    queryKey: ["reports", "stock-summary", applied.clientId, applied.warehouseId],
     queryFn: async () => {
-      const q = new URLSearchParams({ mode: "summary", client_id: applied.clientId })
+      const q = new URLSearchParams({ mode: "summary", client_id: applied.clientId, warehouse_id: applied.warehouseId })
       const res = await apiClient.get<StockSummaryRow[]>(`/reports/stock?${q.toString()}`)
       return res.data ?? []
     },
@@ -214,9 +214,9 @@ export default function ReportsPage() {
   })
 
   const slowQuery = useQuery({
-    queryKey: ["reports", "slow", applied.clientId],
+    queryKey: ["reports", "slow", applied.clientId, applied.warehouseId],
     queryFn: async () => {
-      const q = new URLSearchParams({ mode: "slow", client_id: applied.clientId })
+      const q = new URLSearchParams({ mode: "slow", client_id: applied.clientId, warehouse_id: applied.warehouseId })
       const res = await apiClient.get<SlowMovingRow[]>(`/reports/stock?${q.toString()}`)
       return res.data ?? []
     },
