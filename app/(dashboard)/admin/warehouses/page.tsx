@@ -204,7 +204,7 @@ export default function WarehousesPage() {
   const [destinationPin, setDestinationPin] = useState("")
   const [form, setForm] = useState(blankForm)
 
-  const warehouses = (warehousesQuery.data as WarehouseRow[] | undefined) ?? []
+  const warehouses = useMemo(() => (warehousesQuery.data as WarehouseRow[] | undefined) ?? [], [warehousesQuery.data])
   const selectedWarehouses = warehouses.filter((warehouse) => selectedIds.includes(warehouse.id))
   const searchSuggestions = useMemo(
     () =>

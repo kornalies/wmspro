@@ -246,10 +246,10 @@ export default function MovementHistory() {
     },
   })
 
-  const warehouses = warehousesQuery.data ?? []
-  const clients = clientsQuery.data ?? []
-  const users = usersQuery.data ?? []
-  const rows = movementsQuery.data?.rows ?? []
+  const warehouses = useMemo(() => warehousesQuery.data ?? [], [warehousesQuery.data])
+  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data])
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data])
+  const rows = useMemo(() => movementsQuery.data?.rows ?? [], [movementsQuery.data?.rows])
   const summary =
     movementsQuery.data?.summary ??
     { total: 0, moves_today: 0, unique_items: 0, unique_users: 0, most_active_warehouse: "-" }

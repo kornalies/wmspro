@@ -84,7 +84,7 @@ export default function WESPage() {
   const processQueue = useProcessWesQueue()
   const resolveIncident = useResolveWesIncident()
 
-  const equipment = (equipmentQuery.data?.data as EquipmentRow[] | undefined) ?? []
+  const equipment = useMemo(() => (equipmentQuery.data?.data as EquipmentRow[] | undefined) ?? [], [equipmentQuery.data?.data])
   const commands = (commandsQuery.data?.data as CommandRow[] | undefined) ?? []
   const monitorPayload = (monitorQuery.data?.data as {
     summary?: {

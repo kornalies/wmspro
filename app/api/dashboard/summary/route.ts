@@ -42,7 +42,7 @@ type DashboardSummary = {
       warehouse_name: string
       used_units: number
       total_capacity_units: number
-      utilization_pct: number
+      utilization_pct: number | null
       href: string
     }>
   }
@@ -61,7 +61,7 @@ type DashboardSummary = {
     href?: string
   }>
   meta: {
-    inventory_value_source: "ledger_account_1200"
+    inventory_value_source: "in_stock_serials_standard_mrp"
     inventory_value_as_of: string
   }
 }
@@ -71,7 +71,7 @@ type CapacityRow = {
   warehouse_name: string
   used_units: number
   total_capacity_units: number
-  utilization_pct: number
+  utilization_pct: number | null
   href: string
 }
 
@@ -140,6 +140,8 @@ export async function GET(request: NextRequest) {
     const from = hasCustom ? fromParam : fallback.from
     const to = hasCustom ? toParam : fallback.to
     const companyId = session.companyId
+    const clientIdParam = Number(searchParams.get("client_id") || 0)
+    const clientId = Number.isInteger(clientIdParam) && clientIdParam > 0 ? clientIdParam : null
 
     await syncInvoiceLedger(companyId, session.userId)
 
@@ -148,19 +150,16 @@ export async function GET(request: NextRequest) {
         `SELECT
           (SELECT COUNT(*)::int FROM warehouses w WHERE w.is_active = true AND w.company_id = $1) AS total_warehouses,
           (
-            SELECT COALESCE(SUM(COALESCE(jl.debit, 0) - COALESCE(jl.credit, 0)), 0)::numeric
-            FROM journal_lines jl
-            JOIN journal_entries je
-              ON je.id = jl.journal_entry_id
-             AND je.company_id = jl.company_id
-            JOIN chart_of_accounts coa
-              ON coa.id = jl.account_id
-             AND coa.company_id = jl.company_id
-            WHERE jl.company_id = $1
-              AND coa.account_code = '1200'
-              AND je.entry_date <= $2::date
+            SELECT COALESCE(SUM(COALESCE(i.standard_mrp, 0)), 0)::numeric
+            FROM stock_serial_numbers ssn
+            JOIN items i
+              ON i.id = ssn.item_id
+             AND i.company_id = ssn.company_id
+            WHERE ssn.company_id = $1
+              AND ssn.status = 'IN_STOCK'
+              AND ($2::int IS NULL OR ssn.client_id = $2::int)
           ) AS total_inventory_value`,
-        [companyId, to]
+        [companyId, clientId]
       ),
       query(
         `SELECT COUNT(*)::int AS low_stock_count
@@ -173,16 +172,17 @@ export async function GET(request: NextRequest) {
            LEFT JOIN stock_serial_numbers ssn ON ssn.item_id = i.id AND ssn.company_id = i.company_id
            WHERE i.min_stock_alert IS NOT NULL
              AND i.company_id = $1
+             AND ($2::int IS NULL OR ssn.client_id = $2::int)
            GROUP BY i.id, i.min_stock_alert
          ) x
          WHERE x.in_stock_count < x.min_stock_alert`,
-        [companyId]
+        [companyId, clientId]
       ),
       query(
         `SELECT
-           (SELECT COUNT(*)::int FROM grn_header gh WHERE gh.company_id = $1 AND gh.grn_date BETWEEN $2::date AND $3::date) AS today_grns,
-           (SELECT COUNT(*)::int FROM do_header dh WHERE dh.company_id = $1 AND dh.request_date BETWEEN $2::date AND $3::date) AS today_dos`,
-        [companyId, from, to]
+           (SELECT COUNT(*)::int FROM grn_header gh WHERE gh.company_id = $1 AND gh.grn_date BETWEEN $2::date AND $3::date AND ($4::int IS NULL OR gh.client_id = $4::int)) AS today_grns,
+           (SELECT COUNT(*)::int FROM do_header dh WHERE dh.company_id = $1 AND dh.request_date BETWEEN $2::date AND $3::date AND ($4::int IS NULL OR dh.client_id = $4::int)) AS today_dos`,
+        [companyId, from, to, clientId]
       ),
       query(
         `SELECT
@@ -196,14 +196,15 @@ export async function GET(request: NextRequest) {
           AND zl.company_id = w.company_id
           AND zl.is_active = true
          LEFT JOIN stock_serial_numbers ssn
-           ON ssn.warehouse_id = w.id
-          AND ssn.company_id = w.company_id
-          AND ssn.zone_layout_id = zl.id
+          ON ssn.warehouse_id = w.id
+         AND ssn.company_id = w.company_id
+         AND ssn.zone_layout_id = zl.id
+         AND ($2::int IS NULL OR ssn.client_id = $2::int)
          WHERE w.is_active = true
            AND w.company_id = $1
          GROUP BY w.id, w.warehouse_name
          ORDER BY w.warehouse_name ASC`,
-        [companyId]
+        [companyId, clientId]
       ),
       query(
         `SELECT
@@ -213,6 +214,7 @@ export async function GET(request: NextRequest) {
             JOIN warehouses w ON w.id = gh.warehouse_id AND w.company_id = gh.company_id
             WHERE gh.company_id = $1
               AND gh.grn_date BETWEEN $2::date AND $3::date
+              AND ($4::int IS NULL OR gh.client_id = $4::int)
             ORDER BY gh.created_at DESC
             LIMIT 10
           ) t) AS today_grns_recent,
@@ -222,10 +224,11 @@ export async function GET(request: NextRequest) {
             JOIN warehouses w ON w.id = dh.warehouse_id AND w.company_id = dh.company_id
             WHERE dh.company_id = $1
               AND dh.request_date BETWEEN $2::date AND $3::date
+              AND ($4::int IS NULL OR dh.client_id = $4::int)
             ORDER BY dh.created_at DESC
             LIMIT 10
           ) t) AS today_dos_recent`,
-        [companyId, from, to]
+        [companyId, from, to, clientId]
       ),
       query(
         `SELECT action, ref, href, created_at
@@ -237,6 +240,7 @@ export async function GET(request: NextRequest) {
              gh.created_at
             FROM grn_header gh
             WHERE gh.company_id = $1
+              AND ($4::int IS NULL OR gh.client_id = $4::int)
            UNION ALL
            SELECT
              'DO Created'::text AS action,
@@ -245,6 +249,7 @@ export async function GET(request: NextRequest) {
              dh.created_at
             FROM do_header dh
             WHERE dh.company_id = $1
+              AND ($4::int IS NULL OR dh.client_id = $4::int)
            UNION ALL
            SELECT
              'Gate In'::text AS action,
@@ -253,11 +258,12 @@ export async function GET(request: NextRequest) {
              gi.created_at
             FROM gate_in gi
             WHERE gi.company_id = $1
+              AND ($4::int IS NULL OR gi.client_id = $4::int)
          ) e
          WHERE e.created_at::date BETWEEN $2::date AND $3::date
          ORDER BY created_at DESC
          LIMIT 8`,
-        [companyId, from, to]
+        [companyId, from, to, clientId]
       ),
     ])
 
@@ -275,19 +281,20 @@ export async function GET(request: NextRequest) {
     }) => {
       const usedUnits = Number(row.used_units || 0)
       const totalCapacity = Number(row.total_capacity_units || 0)
-      const utilization = totalCapacity > 0 ? (usedUnits / totalCapacity) * 100 : 0
+      const utilization = totalCapacity > 0 ? Number(((usedUnits / totalCapacity) * 100).toFixed(1)) : null
       return {
         warehouse_id: Number(row.warehouse_id),
         warehouse_name: String(row.warehouse_name),
         used_units: usedUnits,
         total_capacity_units: totalCapacity,
-        utilization_pct: Number(utilization.toFixed(1)),
+        utilization_pct: utilization,
         href: "/admin/zone-layouts",
       }
     })
 
-    const totalUsed = capacityByWarehouse.reduce((sum: number, row: CapacityRow) => sum + row.used_units, 0)
-    const totalCap = capacityByWarehouse.reduce((sum: number, row: CapacityRow) => sum + row.total_capacity_units, 0)
+    const configuredCapacity = capacityByWarehouse.filter((row) => row.total_capacity_units > 0)
+    const totalUsed = configuredCapacity.reduce((sum: number, row: CapacityRow) => sum + row.used_units, 0)
+    const totalCap = configuredCapacity.reduce((sum: number, row: CapacityRow) => sum + row.total_capacity_units, 0)
     const companyUtilizationPct = totalCap > 0 ? Number(((totalUsed / totalCap) * 100).toFixed(1)) : 0
 
     const alerts: DashboardSummary["alerts"] = []
@@ -402,8 +409,8 @@ export async function GET(request: NextRequest) {
       billing_snapshot: billingSnapshot,
       recent_activity: recentActivity,
       meta: {
-        inventory_value_source: "ledger_account_1200",
-        inventory_value_as_of: to,
+        inventory_value_source: "in_stock_serials_standard_mrp",
+        inventory_value_as_of: new Date().toISOString().slice(0, 10),
       },
     }
 

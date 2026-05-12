@@ -23,56 +23,55 @@ import {
 import { Search, Plus, Eye, Package } from 'lucide-react'
 import { DO_STATUS_LABELS, type DOStatus } from '@/lib/do-status'
 
+const DELIVERY_ORDERS = [
+    {
+        id: 1,
+        do_number: 'DO-CHN-2026-0001',
+        request_date: '2026-02-15',
+        client_name: 'ABC Corporation',
+        warehouse_name: 'Chennai Warehouse',
+        total_items: 3,
+        total_quantity_requested: 150,
+        total_quantity_dispatched: 150,
+        status: 'COMPLETED',
+    },
+    {
+        id: 2,
+        do_number: 'DO-CHN-2026-0002',
+        request_date: '2026-02-16',
+        client_name: 'XYZ Industries',
+        warehouse_name: 'Chennai Warehouse',
+        total_items: 5,
+        total_quantity_requested: 200,
+        total_quantity_dispatched: 120,
+        status: 'PARTIALLY_FULFILLED',
+    },
+    {
+        id: 3,
+        do_number: 'DO-CHN-2026-0003',
+        request_date: '2026-02-17',
+        client_name: 'Global Trading',
+        warehouse_name: 'Mumbai Warehouse',
+        total_items: 2,
+        total_quantity_requested: 80,
+        total_quantity_dispatched: 0,
+        status: 'PENDING',
+    },
+] as Array<{
+    id: number
+    do_number: string
+    request_date: string
+    client_name: string
+    warehouse_name: string
+    total_items: number
+    total_quantity_requested: number
+    total_quantity_dispatched: number
+    status: DOStatus
+}>
+
 export function DOList() {
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState('all')
-
-    // Mock data
-    const deliveryOrders = [
-        {
-            id: 1,
-            do_number: 'DO-CHN-2026-0001',
-            request_date: '2026-02-15',
-            client_name: 'ABC Corporation',
-            warehouse_name: 'Chennai Warehouse',
-            total_items: 3,
-            total_quantity_requested: 150,
-            total_quantity_dispatched: 150,
-            status: 'COMPLETED',
-        },
-        {
-            id: 2,
-            do_number: 'DO-CHN-2026-0002',
-            request_date: '2026-02-16',
-            client_name: 'XYZ Industries',
-            warehouse_name: 'Chennai Warehouse',
-            total_items: 5,
-            total_quantity_requested: 200,
-            total_quantity_dispatched: 120,
-            status: 'PARTIALLY_FULFILLED',
-        },
-        {
-            id: 3,
-            do_number: 'DO-CHN-2026-0003',
-            request_date: '2026-02-17',
-            client_name: 'Global Trading',
-            warehouse_name: 'Mumbai Warehouse',
-            total_items: 2,
-            total_quantity_requested: 80,
-            total_quantity_dispatched: 0,
-            status: 'PENDING',
-        },
-    ] as Array<{
-        id: number
-        do_number: string
-        request_date: string
-        client_name: string
-        warehouse_name: string
-        total_items: number
-        total_quantity_requested: number
-        total_quantity_dispatched: number
-        status: DOStatus
-    }>
 
     const getStatusBadge = (status: DOStatus) => {
         const variants: Record<string, { variant: "default" | "secondary" | "outline" | "destructive", color: string }> = {
@@ -91,8 +90,8 @@ export function DOList() {
         )
     }
     const searchSuggestions = useMemo(
-        () => deliveryOrders.flatMap((row) => [row.do_number, row.client_name]),
-        [deliveryOrders]
+        () => DELIVERY_ORDERS.flatMap((row) => [row.do_number, row.client_name]),
+        []
     )
 
     return (
@@ -157,7 +156,7 @@ export function DOList() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {deliveryOrders.map((do_item) => (
+                        {DELIVERY_ORDERS.map((do_item) => (
                             <TableRow key={do_item.id} className="hover:bg-gray-50">
                                 {(() => {
                                     const fulfillmentPercentage = do_item.total_quantity_requested > 0
@@ -195,11 +194,11 @@ export function DOList() {
                                 <TableCell>{getStatusBadge(do_item.status)}</TableCell>
                                 <TableCell className="text-right">
                                     <div className="flex gap-2 justify-end">
-                                        <Button variant="ghost" size="sm">
+                                        <Button variant="ghost" size="sm" aria-label={`View delivery order ${do_item.do_number}`}>
                                             <Eye className="h-4 w-4" />
                                         </Button>
                                         {do_item.status !== 'COMPLETED' && (
-                                            <Button variant="ghost" size="sm" className="text-blue-600">
+                                            <Button variant="ghost" size="sm" className="text-blue-600" aria-label={`Fulfill delivery order ${do_item.do_number}`}>
                                                 <Package className="h-4 w-4" />
                                             </Button>
                                         )}

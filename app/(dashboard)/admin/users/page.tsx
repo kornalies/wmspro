@@ -17,8 +17,6 @@ import {
   Search,
   Shield,
   Upload,
-  User,
-  UserCheck,
   Users,
   Warehouse,
   X,
@@ -211,7 +209,7 @@ export default function UsersPage() {
   const [portalLoading, setPortalLoading] = useState(false)
   const [portalPermissions, setPortalPermissions] = useState<string[]>([])
 
-  const users = (usersQuery.data as UserRow[] | undefined) ?? []
+  const users = useMemo(() => (usersQuery.data as UserRow[] | undefined) ?? [], [usersQuery.data])
   const roleOptions = (rolesQuery.data as Array<{ role_code: string; role_name: string }> | undefined) ?? []
   const warehouseOptions = ((warehousesQuery.data as WarehouseOption[] | undefined) ?? []).filter((warehouse) => warehouse.is_active)
   const selectedUsers = users.filter((user) => selectedIds.includes(user.id))

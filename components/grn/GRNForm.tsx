@@ -192,7 +192,7 @@ export function GRNForm({ draftId, initialData }: GRNFormProps) {
           quantity: item.quantity || 1,
           rate: item.rate || (item.amount && item.quantity ? item.amount / item.quantity : 0),
           serial_numbers: (item.serial_numbers || []).join("\n"),
-        })) || [{ item_id: "", zone_layout_id: "", quantity: 1, rate: 0, serial_numbers: "" }],
+        })) || [{ item_id: "", zone_layout_id: "", quantity: 0, rate: 0, serial_numbers: "" }],
     },
     mode: "onBlur",
   })
@@ -312,7 +312,8 @@ export function GRNForm({ draftId, initialData }: GRNFormProps) {
   const receivedQtyGap =
     typeof receivedQuantity === "number" ? receivedQuantity - totalQuantity : 0
   const damagedQty = Number(useWatch({ control, name: "damage_quantity" }) || 0)
-  const acceptedQty = Math.max(0, totalQuantity - damagedQty)
+  const hasEnteredLineQuantity = watchedLineItems.some((lineItem) => Number(lineItem?.quantity || 0) > 0)
+  const acceptedQty = hasEnteredLineQuantity ? Math.max(0, totalQuantity - damagedQty) : 0
   const duplicateWarning = (duplicateQuery.data?.length ?? 0) > 0
   const hasVariance = Boolean(receivedQtyMismatch || quantityDifference || damagedQty > 0)
   const readinessComplete = [
@@ -752,7 +753,7 @@ export function GRNForm({ draftId, initialData }: GRNFormProps) {
             <Button
               type="button"
               onClick={() =>
-                append({ item_id: "", zone_layout_id: "", quantity: 1, rate: 0, serial_numbers: "" })
+                append({ item_id: "", zone_layout_id: "", quantity: 0, rate: 0, serial_numbers: "" })
               }
               variant="outline"
               size="sm"
@@ -784,6 +785,7 @@ export function GRNForm({ draftId, initialData }: GRNFormProps) {
                     className="text-red-600 hover:bg-red-50 hover:text-red-700"
                   >
                     <Trash2 className="h-4 w-4" />
+                    <span className="sr-only">Remove item {index + 1}</span>
                   </Button>
                 )}
               </div>

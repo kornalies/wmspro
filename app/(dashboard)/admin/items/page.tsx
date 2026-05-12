@@ -145,7 +145,7 @@ export default function ItemsPage() {
   const [deactivateItem, setDeactivateItem] = useState<ItemRow | null>(null)
   const [form, setForm] = useState(blankForm)
 
-  const items = (itemsQuery.data as ItemRow[] | undefined) ?? []
+  const items = useMemo(() => (itemsQuery.data as ItemRow[] | undefined) ?? [], [itemsQuery.data])
   const selectedItems = items.filter((item) => selectedIds.includes(item.id))
   const searchSuggestions = useMemo(
     () => items.flatMap((item) => [item.item_code, item.item_name, item.hsn_code || "", item.uom]),
@@ -483,7 +483,7 @@ export default function ItemsPage() {
                       <TableCell>{money(item.standard_mrp)}</TableCell>
                       <TableCell className="text-right">{numberValue(item.min_stock_alert)}</TableCell>
                       <TableCell className="min-w-44 text-xs text-slate-500">
-                        Current stock: N/A<br />Last received: N/A
+                        Stock metrics not connected
                       </TableCell>
                       <TableCell>
                         <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>

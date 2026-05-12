@@ -125,7 +125,7 @@ export default function IntegrationsPage() {
   const processConnectorQueue = useProcessConnectorQueue()
   const retryEvent = useRetryIntegrationEvent()
 
-  const connectors = (connectorsQuery.data?.data as Connector[] | undefined) ?? []
+  const connectors = useMemo(() => (connectorsQuery.data?.data as Connector[] | undefined) ?? [], [connectorsQuery.data?.data])
   const mappings = (mappingsQuery.data?.data as Mapping[] | undefined) ?? []
   const monitorPayload = (monitorQuery.data?.data as {
     summary?: {

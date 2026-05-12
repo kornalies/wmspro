@@ -413,7 +413,7 @@ export default function AuditLogsPage() {
                 {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Filter className="h-4 w-4" />}
                 Apply
               </Button>
-              <Button variant="outline" size="icon" onClick={resetFilters} title="Reset filters">
+              <Button variant="outline" size="icon" onClick={resetFilters} title="Reset filters" aria-label="Reset audit filters">
                 <RotateCcw className="h-4 w-4" />
               </Button>
             </div>
@@ -454,16 +454,16 @@ export default function AuditLogsPage() {
                 Export CSV
               </Button>
               <div className="flex items-center gap-1">
-                <Button variant="outline" size="icon-sm" onClick={() => void load(1)} disabled={loading || !canPrev} title="First page">
+                <Button variant="outline" size="icon-sm" onClick={() => void load(1)} disabled={loading || !canPrev} title="First page" aria-label="Go to first audit page">
                   <ChevronsLeft className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="icon-sm" onClick={() => void load(page - 1)} disabled={loading || !canPrev} title="Previous page">
+                <Button variant="outline" size="icon-sm" onClick={() => void load(page - 1)} disabled={loading || !canPrev} title="Previous page" aria-label="Go to previous audit page">
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="icon-sm" onClick={() => void load(page + 1)} disabled={loading || !canNext} title="Next page">
+                <Button variant="outline" size="icon-sm" onClick={() => void load(page + 1)} disabled={loading || !canNext} title="Next page" aria-label="Go to next audit page">
                   <ChevronRight className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="icon-sm" onClick={() => void load(totalPages)} disabled={loading || !canNext} title="Last page">
+                <Button variant="outline" size="icon-sm" onClick={() => void load(totalPages)} disabled={loading || !canNext} title="Last page" aria-label="Go to last audit page">
                   <ChevronsRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -531,6 +531,7 @@ export default function AuditLogsPage() {
                               setSelectedRow(row)
                             }}
                             title="View audit details"
+                            aria-label={`View audit details for ${row.action}`}
                           >
                             <Eye className="h-4 w-4" />
                           </Button>

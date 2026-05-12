@@ -8,12 +8,10 @@ import {
   Download,
   Eye,
   FileSpreadsheet,
-  Filter,
   Mail,
   MoreHorizontal,
   Phone,
   Plus,
-  Search,
   ShieldCheck,
   Upload,
   Users,
@@ -191,7 +189,7 @@ export function AdminClients() {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [formData, setFormData] = useState(blankForm)
 
-  const clients = (clientsQuery.data as Client[] | undefined) ?? []
+  const clients = useMemo(() => (clientsQuery.data as Client[] | undefined) ?? [], [clientsQuery.data])
   const cities = useMemo(() => Array.from(new Set(clients.map((c) => c.city).filter(Boolean))) as string[], [clients])
   const states = useMemo(() => Array.from(new Set(clients.map((c) => c.state).filter(Boolean))) as string[], [clients])
   const billingTerms = useMemo(() => Array.from(new Set(clients.map((c) => c.billing_terms).filter(Boolean))) as string[], [clients])

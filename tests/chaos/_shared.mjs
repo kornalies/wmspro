@@ -259,7 +259,7 @@ export async function ensureChaosFixtures() {
       }
 
       await setTenant(companyAId)
-      const doA = await client.query(
+      await client.query(
         `INSERT INTO do_header (company_id, do_number, request_date, client_id, warehouse_id, requested_by, total_items, total_quantity_requested, total_quantity_dispatched, status, created_by)
          VALUES ($1, 'DO-DEF-CHAOS', CURRENT_DATE, $2, $3, 'Chaos Default', 1, 1, 0, 'DRAFT', $4)
          ON CONFLICT (company_id, do_number)
@@ -278,7 +278,7 @@ export async function ensureChaosFixtures() {
       )
 
       await setTenant(companyAId)
-      const gateA = await client.query(
+      await client.query(
         `INSERT INTO gate_in (company_id, gate_in_number, gate_in_datetime, arrival_datetime, warehouse_id, client_id, truck_number, driver_name, status, created_by)
          VALUES ($1, 'GIN-DEF-CHAOS', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $2, $3, 'KA01AA0001', 'Driver A', 'PENDING', $4)
          ON CONFLICT (company_id, gate_in_number)

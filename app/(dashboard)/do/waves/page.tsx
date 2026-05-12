@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
+import { useQuery } from "@tanstack/react-query"
 import { Loader2, PlayCircle, Plus, Send, ShieldCheck, UserPlus } from "lucide-react"
 
+import { apiClient } from "@/lib/api-client"
 import {
   useAllocateDOWave,
   useAssignTask,
@@ -16,7 +18,6 @@ import {
 } from "@/hooks/use-do-waves"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -57,12 +58,57 @@ type TaskRow = {
   assigned_to_name: string | null
 }
 
+type WarehouseOption = {
+  id: number
+  warehouse_code: string | null
+  warehouse_name: string
+  city?: string | null
+}
+
+type ClientOption = {
+  id: number
+  client_code: string | null
+  client_name: string
+}
+
+type PickerOption = {
+  id: number
+  full_name: string
+  username: string
+  role: string
+  warehouse_id: number | null
+  warehouse_name: string | null
+}
+
 export default function DOWavesPage() {
   const [warehouseId, setWarehouseId] = useState("")
-  const [clientId, setClientId] = useState("")
-  const [allocatorUserIds, setAllocatorUserIds] = useState("")
+  const [clientId, setClientId] = useState("all")
+  const [selectedPickerIds, setSelectedPickerIds] = useState<number[]>([])
   const [selectedWaveId, setSelectedWaveId] = useState<number | undefined>(undefined)
 
+  const warehousesQuery = useQuery({
+    queryKey: ["do-waves", "warehouse-options"],
+    queryFn: async () => {
+      const response = await apiClient.get<WarehouseOption[]>("/warehouses?is_active=true")
+      return response.data ?? []
+    },
+  })
+  const clientsQuery = useQuery({
+    queryKey: ["do-waves", "client-options"],
+    queryFn: async () => {
+      const response = await apiClient.get<ClientOption[]>("/clients?is_active=true")
+      return response.data ?? []
+    },
+  })
+  const pickersQuery = useQuery({
+    queryKey: ["do-waves", "picker-options", warehouseId],
+    enabled: Boolean(warehouseId),
+    queryFn: async () => {
+      const qp = new URLSearchParams({ warehouse_id: warehouseId })
+      const response = await apiClient.get<PickerOption[]>(`/do/waves/pickers?${qp.toString()}`)
+      return response.data ?? []
+    },
+  })
   const waveQuery = useDOWaves()
   const taskQuery = useDOWaveTasks(selectedWaveId)
   const createWave = useCreateDOWave()
@@ -72,30 +118,45 @@ export default function DOWavesPage() {
   const startTask = useStartTask()
   const completeTask = useCompleteTask()
 
-  const waves = (waveQuery.data?.data as WaveRow[] | undefined) ?? []
+  const waves = useMemo(() => (waveQuery.data?.data as WaveRow[] | undefined) ?? [], [waveQuery.data?.data])
+  const warehouses = useMemo(() => warehousesQuery.data ?? [], [warehousesQuery.data])
+  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data])
+  const pickers = useMemo(() => pickersQuery.data ?? [], [pickersQuery.data])
   const tasks = (taskQuery.data?.data as TaskRow[] | undefined) ?? []
 
   const selectedWave = useMemo(
     () => waves.find((w) => w.id === selectedWaveId) || null,
     [waves, selectedWaveId]
   )
-  const parsedAllocatorIds = useMemo(
+  const selectedPickerNames = useMemo(
     () =>
-      allocatorUserIds
-        .split(",")
-        .map((v) => Number(v.trim()))
-        .filter((n) => Number.isInteger(n) && n > 0),
-    [allocatorUserIds]
+      pickers
+        .filter((picker) => selectedPickerIds.includes(picker.id))
+        .map((picker) => picker.full_name || picker.username),
+    [pickers, selectedPickerIds]
   )
 
   const create = async () => {
-    if (!warehouseId.trim()) return
+    if (!warehouseId) return
     await createWave.mutateAsync({
       warehouse_id: Number(warehouseId),
-      client_id: clientId ? Number(clientId) : undefined,
+      client_id: clientId !== "all" ? Number(clientId) : undefined,
       strategy: "BATCH",
       max_orders: 20,
     })
+  }
+
+  const togglePicker = (pickerId: number) => {
+    setSelectedPickerIds((current) =>
+      current.includes(pickerId)
+        ? current.filter((id) => id !== pickerId)
+        : [...current, pickerId]
+    )
+  }
+
+  const handleWarehouseChange = (value: string) => {
+    setWarehouseId(value)
+    setSelectedPickerIds([])
   }
 
   const getStatusBadge = (status: string) => {
@@ -137,21 +198,44 @@ export default function DOWavesPage() {
           <Plus className="h-4 w-4 text-blue-600" />
           <p className="text-sm font-medium">Create Wave</p>
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <Input
-            value={warehouseId}
-            onChange={(e) => setWarehouseId(e.target.value)}
-            placeholder="Warehouse ID"
-          />
-          <Input
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="Client ID (optional)"
-          />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1.3fr)_auto]">
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Warehouse</p>
+            <Select value={warehouseId} onValueChange={handleWarehouseChange}>
+              <SelectTrigger>
+                <SelectValue placeholder={warehousesQuery.isLoading ? "Loading warehouses..." : "Choose warehouse"} />
+              </SelectTrigger>
+              <SelectContent>
+                {warehouses.map((warehouse) => (
+                  <SelectItem key={warehouse.id} value={String(warehouse.id)}>
+                    {warehouse.warehouse_name}
+                    {warehouse.warehouse_code ? ` (${warehouse.warehouse_code})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Client</p>
+            <Select value={clientId} onValueChange={setClientId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All clients</SelectItem>
+                {clients.map((client) => (
+                  <SelectItem key={client.id} value={String(client.id)}>
+                    {client.client_name}
+                    {client.client_code ? ` (${client.client_code})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Button
             onClick={create}
-            disabled={createWave.isPending || !warehouseId.trim()}
-            className="bg-blue-600 hover:bg-blue-700"
+            disabled={createWave.isPending || !warehouseId}
+            className="self-end bg-blue-600 hover:bg-blue-700"
           >
             <Plus className="mr-2 h-4 w-4" />
             Create
@@ -164,21 +248,80 @@ export default function DOWavesPage() {
           <UserPlus className="h-4 w-4 text-indigo-600" />
           <p className="text-sm font-medium">Bulk Allocate Queued Tasks</p>
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
-          <Input
-            value={allocatorUserIds}
-            onChange={(e) => setAllocatorUserIds(e.target.value)}
-            placeholder="Picker User IDs (e.g. 2,4,9)"
-            className="md:col-span-3"
-          />
+        <div className="space-y-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm text-muted-foreground">
+              {selectedWave
+                ? `Allocate open tasks for ${selectedWave.wave_number}`
+                : "Select a wave from the table before allocating tasks"}
+            </p>
+            <p className="text-sm font-medium text-slate-700">
+              {selectedPickerIds.length
+                ? `${selectedPickerIds.length} picker${selectedPickerIds.length === 1 ? "" : "s"} selected`
+                : "No pickers selected"}
+            </p>
+          </div>
+          {!warehouseId ? (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              Choose a warehouse above to show available pickers.
+            </div>
+          ) : pickersQuery.isLoading ? (
+            <div className="flex items-center gap-2 rounded-md border p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading available pickers
+            </div>
+          ) : pickers.length ? (
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {pickers.map((picker) => {
+                const checked = selectedPickerIds.includes(picker.id)
+                return (
+                  <label
+                    key={picker.id}
+                    className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 text-sm transition ${
+                      checked ? "border-indigo-300 bg-indigo-50" : "hover:bg-slate-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300"
+                      checked={checked}
+                      onChange={() => togglePicker(picker.id)}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-slate-900">
+                        {picker.full_name || picker.username}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {picker.role.replaceAll("_", " ")}
+                        {picker.warehouse_name ? ` - ${picker.warehouse_name}` : " - Floating"}
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              No active warehouse pickers found for this location.
+            </div>
+          )}
+          {selectedPickerNames.length ? (
+            <div className="flex flex-wrap gap-2">
+              {selectedPickerNames.map((name) => (
+                <Badge key={name} variant="secondary">
+                  {name}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
           <Button
             variant="outline"
-            disabled={!selectedWaveId || parsedAllocatorIds.length === 0 || allocateWave.isPending}
+            disabled={!selectedWaveId || selectedPickerIds.length === 0 || allocateWave.isPending}
             onClick={() =>
               selectedWaveId
                 ? allocateWave.mutate({
                     waveId: selectedWaveId,
-                    userIds: parsedAllocatorIds,
+                    userIds: selectedPickerIds,
                   })
                 : null
             }
@@ -264,7 +407,7 @@ export default function DOWavesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Task</TableHead>
+              <TableHead>Task Ref</TableHead>
               <TableHead>Wave</TableHead>
               <TableHead>DO</TableHead>
               <TableHead>Item</TableHead>
@@ -278,7 +421,7 @@ export default function DOWavesPage() {
           <TableBody>
             {tasks.map((task) => (
               <TableRow key={task.id}>
-                <TableCell>{task.id}</TableCell>
+                <TableCell>{`PICK-${String(task.id).padStart(5, "0")}`}</TableCell>
                 <TableCell>{task.wave_number}</TableCell>
                 <TableCell>{task.do_number}</TableCell>
                 <TableCell>
@@ -294,6 +437,7 @@ export default function DOWavesPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        aria-label={`Assign ${task.do_number} pick task to me`}
                         onClick={() => assignTask.mutate({ taskId: task.id })}
                       >
                         <UserPlus className="h-4 w-4" />
@@ -303,6 +447,7 @@ export default function DOWavesPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        aria-label={`Start ${task.do_number} pick task`}
                         onClick={() => startTask.mutate(task.id)}
                       >
                         <PlayCircle className="h-4 w-4" />
@@ -312,6 +457,7 @@ export default function DOWavesPage() {
                       <Button
                         size="sm"
                         className="bg-green-600 hover:bg-green-700"
+                        aria-label={`Complete ${task.do_number} pick task`}
                         onClick={() => completeTask.mutate({ taskId: task.id })}
                       >
                         <ShieldCheck className="h-4 w-4" />

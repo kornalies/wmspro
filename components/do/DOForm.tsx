@@ -175,7 +175,7 @@ function defaultValues(): FormValues {
     outward_remarks: "",
     allocation_rule: "FIFO",
     attachment_names: [],
-    lineItems: [{ item_id: "", quantity_requested: 1 }],
+    lineItems: [{ item_id: "", quantity_requested: 0 }],
   }
 }
 
@@ -331,7 +331,7 @@ export function DOForm() {
       const itemId = Number(line?.item_id || 0)
       const qty = Number(line?.quantity_requested || 0)
       if (itemId && qty > 0) completedLines += 1
-      requested += qty > 0 ? qty : 0
+      requested += itemId && qty > 0 ? qty : 0
       const lineAvailable = itemId ? Number(availabilityByItem.get(itemId) ?? 0) : 0
       available += lineAvailable
       short += Math.max(0, qty - lineAvailable)
@@ -341,7 +341,7 @@ export function DOForm() {
       available,
       short,
       completedLines,
-      enough: short === 0,
+      enough: completedLines > 0 && short === 0,
       totalLines: lineItems.length,
     }
   }, [lineItems, availabilityByItem])
@@ -755,7 +755,7 @@ export function DOForm() {
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <CardTitle>Items & Allocation</CardTitle>
-                  <Button type="button" onClick={() => append({ item_id: "", quantity_requested: 1 })} variant="outline" size="sm">
+                  <Button type="button" onClick={() => append({ item_id: "", quantity_requested: 0 })} variant="outline" size="sm">
                     <Plus className="h-4 w-4" />
                     Add Item
                   </Button>
@@ -791,7 +791,7 @@ export function DOForm() {
                       <div className="mb-3 flex items-center justify-between">
                         <h4 className="font-medium">Item #{index + 1}</h4>
                         {fields.length > 1 ? (
-                          <Button type="button" onClick={() => remove(index)} variant="ghost" size="icon-sm" className="text-red-600">
+                          <Button type="button" onClick={() => remove(index)} variant="ghost" size="icon-sm" className="text-red-600" aria-label={`Remove item ${index + 1}`}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         ) : null}
