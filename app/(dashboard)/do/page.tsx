@@ -569,7 +569,9 @@ export default function DOPage() {
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => exportRows("csv")}>Export Selected</Button>
               <Button variant="outline" size="sm" onClick={() => window.print()}>Print View</Button>
-              <Button variant="outline" size="sm" onClick={() => toast.info("Assign picker can be enabled once picker ownership is added to DO workflow.")}>Assign Picker</Button>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/do/waves">Assign Picker</Link>
+              </Button>
               <Button variant="outline" size="sm" asChild>
                 <Link href="/do/waves">Create Wave</Link>
               </Button>
@@ -749,37 +751,37 @@ function RowActions({
 }) {
   return (
     <div className="flex justify-end gap-1">
-      <Button asChild variant="ghost" size="icon-sm" title="Open fulfillment">
+      <Button asChild variant="ghost" size="icon-sm" title="Open fulfillment" aria-label={`Open fulfillment for ${row.do_number}`}>
         <Link href={`/do/${encodeURIComponent(row.do_number)}/fulfill`}>
           <Eye className="h-4 w-4" />
         </Link>
       </Button>
-      <Button asChild variant="ghost" size="icon-sm" title="Print dispatch note">
+      <Button asChild variant="ghost" size="icon-sm" title="Print dispatch note" aria-label={`Print dispatch note for ${row.do_number}`}>
         <a href={`/api/do/${encodeURIComponent(row.do_number)}/download?profile=dispatch_note`} target="_blank" rel="noopener noreferrer">
           <Printer className="h-4 w-4 text-slate-700 dark:text-slate-300" />
         </a>
       </Button>
-      <Button asChild variant="ghost" size="icon-sm" title="Print packing slip">
+      <Button asChild variant="ghost" size="icon-sm" title="Print packing slip" aria-label={`Print packing slip for ${row.do_number}`}>
         <a href={`/api/do/${encodeURIComponent(row.do_number)}/download?profile=packing_slip`} target="_blank" rel="noopener noreferrer">
           <FileText className="h-4 w-4 text-indigo-700 dark:text-indigo-300" />
         </a>
       </Button>
       {(row.status === "STAGED" || row.status === "PARTIALLY_FULFILLED") ? (
-        <Button variant="ghost" size="icon-sm" className="text-blue-600" title="Record dispatch" onClick={onFulfill}>
+        <Button variant="ghost" size="icon-sm" className="text-blue-600" title="Record dispatch" aria-label={`Record dispatch for ${row.do_number}`} onClick={onFulfill}>
           <Package className="h-4 w-4" />
         </Button>
       ) : null}
       {row.status !== "COMPLETED" && row.status !== "CANCELLED" ? (
-        <Button variant="ghost" size="icon-sm" className="text-red-600" title="Cancel DO" disabled={isPending} onClick={onCancel}>
+        <Button variant="ghost" size="icon-sm" className="text-red-600" title="Cancel DO" aria-label={`Cancel DO ${row.do_number}`} disabled={isPending} onClick={onCancel}>
           <XCircle className="h-4 w-4" />
         </Button>
       ) : null}
       {row.status === "COMPLETED" ? (
-        <Button variant="ghost" size="icon-sm" className="text-red-600" title="Reverse DO" disabled={isPending} onClick={onReverse}>
+        <Button variant="ghost" size="icon-sm" className="text-red-600" title="Reverse DO" aria-label={`Reverse DO ${row.do_number}`} disabled={isPending} onClick={onReverse}>
           <RotateCcw className="h-4 w-4" />
         </Button>
       ) : null}
-      <Button variant="ghost" size="icon-sm" title="More actions" onClick={() => toast.info("Timeline, audit log, attachments, and carrier events can open from the fulfillment detail.")}>
+      <Button variant="ghost" size="icon-sm" title="More actions" aria-label={`More actions for DO ${row.do_number}`} onClick={() => toast.info("Timeline, audit log, attachments, and carrier events can open from the fulfillment detail.")}>
         <MoreHorizontal className="h-4 w-4" />
       </Button>
     </div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { LogOut, Menu, Moon, Search, Sun } from "lucide-react"
 import { usePathname, useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
@@ -26,7 +26,7 @@ export function AppHeader() {
   const { user } = useAuth()
   const logoutMutation = useLogout()
   const { theme, setTheme } = useTheme()
-  const [globalSearch, setGlobalSearch] = useState("")
+  const [globalSearchState, setGlobalSearchState] = useState({ value: "", pathname })
   const [showProfileMenu, setShowProfileMenu] = useState(false)
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
   const switchCompanyMutation = useSwitchCompany()
@@ -76,6 +76,7 @@ export function AppHeader() {
     () => ["GRN-", "DO-", "Serial", ...crumbs.map((crumb) => crumb.label)],
     [crumbs]
   )
+  const globalSearch = globalSearchState.pathname === pathname ? globalSearchState.value : ""
 
   const handleGlobalSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -91,6 +92,12 @@ export function AppHeader() {
       return
     }
     router.push(`/stock/search?serial=${encodeURIComponent(term)}`)
+  }
+
+  const submitGlobalSearchFromKeyboard = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return
+    e.preventDefault()
+    e.currentTarget.form?.requestSubmit()
   }
 
   useEffect(() => {
@@ -119,6 +126,7 @@ export function AppHeader() {
               window.dispatchEvent(event)
             }}
             title="Open menu"
+            aria-label="Open menu"
           >
             <Menu className="h-4 w-4" />
           </Button>
@@ -149,11 +157,14 @@ export function AppHeader() {
           <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <TypeaheadInput
             value={globalSearch}
-            onValueChange={setGlobalSearch}
+            onValueChange={(value) => setGlobalSearchState({ value, pathname })}
+            onKeyDown={submitGlobalSearchFromKeyboard}
             suggestions={globalSearchSuggestions}
             placeholder="Search GRN / DO / Serial..."
             className="h-9 pl-8"
+            aria-label="Global search"
           />
+          <button type="submit" className="sr-only">Search</button>
         </form>
         <Badge variant="outline" className="font-mono text-xs">
           Company: {user?.company_code || "N/A"}

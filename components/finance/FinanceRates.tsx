@@ -596,10 +596,22 @@ export function FinanceRates() {
                 <TableCell>{statusBadge(row)}</TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon-sm" onClick={() => duplicateRateCard(row)} title="Duplicate rate card">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => duplicateRateCard(row)}
+                      title="Duplicate rate card"
+                      aria-label={`Duplicate rate card ${row.rate_card_code}`}
+                    >
                       <Copy className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon-sm" onClick={() => openEdit(row)} title="Edit rate card">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => openEdit(row)}
+                      title="Edit rate card"
+                      aria-label={`Edit rate card ${row.rate_card_code}`}
+                    >
                       <Edit className="h-4 w-4" />
                     </Button>
                     <Button
@@ -609,6 +621,7 @@ export function FinanceRates() {
                       onClick={() => setDeleteTarget(row)}
                       disabled={deactivateMutation.isPending}
                       title="Deactivate rate card"
+                      aria-label={`Deactivate rate card ${row.rate_card_code}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -646,11 +659,23 @@ export function FinanceRates() {
                 <SelectItem value="50">50 rows</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="icon-sm" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              disabled={currentPage === 1}
+              aria-label="Go to previous rate cards page"
+            >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="min-w-20 text-center">Page {currentPage} of {pageCount}</span>
-            <Button variant="outline" size="icon-sm" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+              disabled={currentPage === pageCount}
+              aria-label="Go to next rate cards page"
+            >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>

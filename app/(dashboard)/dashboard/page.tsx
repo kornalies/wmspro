@@ -50,7 +50,7 @@ type SummaryResponse = {
       warehouse_name: string
       used_units: number
       total_capacity_units: number
-      utilization_pct: number
+      utilization_pct: number | null
       href: string
     }>
   }
@@ -99,13 +99,14 @@ export default function DashboardPage() {
   const [hiddenWidgets, setHiddenWidgets] = useState<string[]>([])
 
   const summaryQuery = useQuery({
-    queryKey: ["dashboard", "summary", range, customFrom, customTo],
+    queryKey: ["dashboard", "summary", range, customFrom, customTo, clientId],
     queryFn: async () => {
       const params = new URLSearchParams({ range })
       if (range === "custom" && customFrom && customTo) {
         params.set("from", customFrom)
         params.set("to", customTo)
       }
+      if (clientId !== "all") params.set("client_id", clientId)
       const res = await apiClient.get<SummaryResponse>(`/dashboard/summary?${params.toString()}`)
       return res.data
     },
@@ -139,7 +140,7 @@ export default function DashboardPage() {
     return rows.filter((row) => String(row.warehouse_id) === warehouseId)
   }, [data?.drilldown.capacity_by_warehouse, warehouseId])
 
-  const exceptionCount = Number(data?.executive.stock_alerts || 0) + Number(data?.billing_snapshot.overdue_invoices || 0) + visibleCapacity.filter((row) => row.utilization_pct >= 90).length
+  const exceptionCount = Number(data?.executive.stock_alerts || 0) + Number(data?.billing_snapshot.overdue_invoices || 0) + visibleCapacity.filter((row) => row.utilization_pct !== null && row.utilization_pct >= 90).length
   const capacitySeverity = Number(data?.executive.capacity_utilization_pct || 0) >= 95 ? "critical" : Number(data?.executive.capacity_utilization_pct || 0) >= 90 ? "warning" : "healthy"
 
   const stats = [
@@ -438,9 +439,9 @@ export default function DashboardPage() {
               severity={Number(data?.billing_snapshot.overdue_invoices || 0) > 0 ? "warning" : "healthy"}
             />
             <AttentionRow
-              label={`${visibleCapacity.filter((row) => row.utilization_pct >= 90).length} warehouse capacity warning(s)`}
+              label={`${visibleCapacity.filter((row) => row.utilization_pct !== null && row.utilization_pct >= 90).length} warehouse capacity warning(s)`}
               href="/admin/zone-layouts"
-              severity={visibleCapacity.some((row) => row.utilization_pct >= 95) ? "critical" : visibleCapacity.some((row) => row.utilization_pct >= 90) ? "warning" : "healthy"}
+              severity={visibleCapacity.some((row) => row.utilization_pct !== null && row.utilization_pct >= 95) ? "critical" : visibleCapacity.some((row) => row.utilization_pct !== null && row.utilization_pct >= 90) ? "warning" : "healthy"}
             />
             <AttentionRow label="Integration health available in monitor" href="/integrations" severity="neutral" />
           </CardContent>
@@ -488,15 +489,15 @@ export default function DashboardPage() {
             <div key={row.warehouse_id} className="rounded-md border bg-white p-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium">{row.warehouse_name}</span>
-                <Badge className={row.utilization_pct >= 95 ? "bg-red-100 text-red-700" : row.utilization_pct >= 90 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}>
-                  {row.utilization_pct.toFixed(1)}%
+                <Badge className={row.utilization_pct === null ? "bg-slate-100 text-slate-700" : row.utilization_pct >= 95 ? "bg-red-100 text-red-700" : row.utilization_pct >= 90 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}>
+                  {row.utilization_pct === null ? "Unconfigured" : `${row.utilization_pct.toFixed(1)}%`}
                 </Badge>
               </div>
               <div className="mt-2 h-2 rounded-full bg-slate-100">
-                <div className={row.utilization_pct >= 95 ? "h-2 rounded-full bg-red-600" : row.utilization_pct >= 90 ? "h-2 rounded-full bg-amber-500" : "h-2 rounded-full bg-emerald-600"} style={{ width: `${Math.min(100, row.utilization_pct)}%` }} />
+                <div className={row.utilization_pct === null ? "h-2 rounded-full bg-slate-300" : row.utilization_pct >= 95 ? "h-2 rounded-full bg-red-600" : row.utilization_pct >= 90 ? "h-2 rounded-full bg-amber-500" : "h-2 rounded-full bg-emerald-600"} style={{ width: `${row.utilization_pct === null ? 100 : Math.min(100, row.utilization_pct)}%` }} />
               </div>
               <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                <span>{row.used_units}/{row.total_capacity_units} units</span>
+                <span>{row.total_capacity_units > 0 ? `${row.used_units}/${row.total_capacity_units} units` : `${row.used_units} units, capacity missing`}</span>
                 <Link href={row.href} className="font-semibold text-blue-600 hover:underline">Drill down</Link>
               </div>
             </div>

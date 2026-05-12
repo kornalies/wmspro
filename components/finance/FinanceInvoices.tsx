@@ -503,7 +503,7 @@ export function FinanceInvoices() {
   })
 
   const payload = invoicesQuery.data
-  const invoices = payload?.invoices ?? []
+  const invoices = useMemo(() => payload?.invoices ?? [], [payload?.invoices])
   const searchSuggestions = useMemo(
     () => invoices.flatMap((invoice) => [invoice.invoice_number, invoice.client_name]),
     [invoices]
@@ -560,7 +560,7 @@ export function FinanceInvoices() {
             return b.invoice_date.localeCompare(a.invoice_date)
         }
       })
-  }, [clientFilter, dueFrom, dueTo, invoiceFrom, invoiceTo, invoices, sortKey])
+  }, [clientFilter, dueFrom, dueTo, invoiceFrom, invoiceTo, invoices, sortKey, statusFilter])
 
   const pageSize = 10
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize))
@@ -1013,10 +1013,10 @@ export function FinanceInvoices() {
                       <TableCell>{getStatusBadge(invoice.status)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="sm" title="View" onClick={() => setViewInvoice(invoice)}>
+                          <Button variant="ghost" size="sm" title="View" aria-label={`View invoice ${invoice.invoice_number}`} onClick={() => setViewInvoice(invoice)}>
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" title="Download PDF" onClick={() => handleDownloadPDF(invoice)}>
+                          <Button variant="ghost" size="sm" title="Download PDF" aria-label={`Download invoice ${invoice.invoice_number} PDF`} onClick={() => handleDownloadPDF(invoice)}>
                             <Download className="h-4 w-4" />
                           </Button>
                           {Number(invoice.balance) > 0 && (
@@ -1025,6 +1025,7 @@ export function FinanceInvoices() {
                               size="sm"
                               className="text-emerald-700"
                               title="Record Payment"
+                              aria-label={`Record payment for invoice ${invoice.invoice_number}`}
                               onClick={() => {
                                 openPaymentDialog(invoice)
                               }}
@@ -1038,6 +1039,7 @@ export function FinanceInvoices() {
                               size="sm"
                               className="text-blue-600"
                               title="Send Email"
+                              aria-label={`Send invoice ${invoice.invoice_number} by email`}
                               disabled={sendEmailMutation.isPending}
                               onClick={() => sendEmailMutation.mutate(invoice)}
                             >

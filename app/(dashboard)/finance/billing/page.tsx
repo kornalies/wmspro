@@ -1351,13 +1351,29 @@ export default function BillingPage() {
                       <TableCell className="text-xs text-slate-600 dark:text-slate-300">{tx.remarks || "Pending billing run"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button variant="outline" size="sm" onClick={() => window.alert(`Source: ${tx.source_type} ${tx.source_ref_no || tx.source_doc_id || "-"}`)}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              toast.info("Source transaction", {
+                                description: `${tx.source_type} ${tx.source_ref_no || tx.source_doc_id || "-"}`,
+                              })
+                            }
+                          >
                             View Source
                           </Button>
                           <Button variant="outline" size="sm" onClick={() => markForNextRunMutation.mutate(tx.id)} disabled={markForNextRunMutation.isPending}>
                             Mark Next Run
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => window.alert(tx.remarks || "No billing trace details")}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              toast.info("Billing trace", {
+                                description: tx.remarks || "No billing trace details recorded.",
+                              })
+                            }
+                          >
                             Inspect Trace
                           </Button>
                         </div>

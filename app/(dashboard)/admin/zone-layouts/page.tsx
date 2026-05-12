@@ -6,7 +6,6 @@ import {
   Archive,
   Boxes,
   Building2,
-  CheckCircle2,
   Copy,
   Download,
   Edit,
@@ -633,13 +632,31 @@ export default function ZoneLayoutsPage() {
                         <TableCell>
                           <div className="flex justify-end gap-1">
                             <Button variant="ghost" size="sm" onClick={() => setDetailRow(row)}>View</Button>
-                            <Button variant="ghost" size="sm" onClick={() => openEdit(row)} title="Edit layout">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openEdit(row)}
+                              title="Edit layout"
+                              aria-label={`Edit layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
+                            >
                               <Edit className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="sm" onClick={() => openDuplicate(row)} title="Duplicate layout">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openDuplicate(row)}
+                              title="Duplicate layout"
+                              aria-label={`Duplicate layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
+                            >
                               <Copy className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="sm" onClick={() => handleDeactivate(row)} title="Deactivate layout">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeactivate(row)}
+                              title="Deactivate layout"
+                              aria-label={`Deactivate layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
+                            >
                               <Archive className="h-4 w-4 text-red-600" />
                             </Button>
                           </div>

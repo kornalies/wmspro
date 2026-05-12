@@ -257,6 +257,12 @@ export async function GET(request: NextRequest) {
            AND ip.invoice_id = ih.id
        ) payments ON true
        WHERE ih.company_id = $1
+         AND ih.invoice_date::date <= CURRENT_DATE
+         AND c.client_name NOT ILIKE '%smoke%'
+         AND c.client_code NOT ILIKE '%smoke%'
+         AND ih.invoice_number NOT ILIKE '%smoke%'
+         AND COALESCE(ih.draft_run_key, '') NOT ILIKE '%smoke%'
+         AND COALESCE(ih.draft_run_key, '') NOT ILIKE '%hardening%'
          AND ($2::text IS NULL OR (
            CASE
              WHEN COALESCE(credit_notes.reversal_credit_total, 0) >= COALESCE(ih.grand_total, 0)

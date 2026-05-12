@@ -17,6 +17,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate staging deployment environment
+        shell: bash
+        env:
+          DEPLOY_ENV: staging
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.STAGING_JWT_SECRET }}
+          APP_URL: ${{ secrets.STAGING_APP_URL }}
+          WMS_API_BASE_URL: ${{ secrets.STAGING_WMS_API_BASE_URL }}
+          WMS_COMPANY_CODE: ${{ secrets.STAGING_WMS_COMPANY_CODE }}
+          WMS_USERNAME: ${{ secrets.STAGING_WMS_USERNAME }}
+          WMS_PASSWORD: ${{ secrets.STAGING_WMS_PASSWORD }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          npm run ci:validate-env
+          for key in STAGING_HOST STAGING_USER STAGING_APP_DIR STAGING_SSH_PRIVATE_KEY; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing required staging secret: ${key}"
+              exit 1
+            fi
+          done
+
       - name: Setup SSH key
         shell: bash
         run: |
@@ -42,6 +72,7 @@ jobs:
           set -a
           source .env.production
           set +a
+          DEPLOY_ENV=staging npm run ci:validate-env
           npm run db:migrate
           npx next build
           sudo systemctl restart wmspro

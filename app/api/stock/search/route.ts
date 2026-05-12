@@ -22,9 +22,9 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, Number(searchParams.get("page") || 1))
     const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") || 50)))
 
-    const where: string[] = []
-    const params: Array<string | number> = []
-    let idx = 1
+    const where: string[] = [`ssn.company_id = $1`]
+    const params: Array<string | number> = [session.companyId]
+    let idx = 2
 
     if (serial) {
       where.push(`ssn.serial_number ILIKE $${idx++}`)
@@ -99,12 +99,16 @@ export async function GET(request: NextRequest) {
         COALESCE(zl.zone_name, 'Unassigned') AS zone_name,
         zl.rack_name,
         zl.bin_name,
-        COALESCE(ssn.bin_location, CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code), 'Unassigned') AS bin_location
+        COALESCE(
+          NULLIF(ssn.bin_location, ''),
+          NULLIF(CONCAT_WS('/', NULLIF(zl.zone_code, ''), NULLIF(zl.rack_code, ''), NULLIF(zl.bin_code, '')), ''),
+          'Unassigned'
+        ) AS bin_location
       FROM stock_serial_numbers ssn
-      JOIN items i ON i.id = ssn.item_id
-      JOIN clients c ON c.id = ssn.client_id
-      JOIN warehouses w ON w.id = ssn.warehouse_id
-      LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id
+      JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
+      JOIN clients c ON c.id = ssn.client_id AND c.company_id = ssn.company_id
+      JOIN warehouses w ON w.id = ssn.warehouse_id AND w.company_id = ssn.company_id
+      LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id AND zl.company_id = ssn.company_id
       ${whereClause}
       ORDER BY ssn.received_date DESC
       LIMIT $${limitParamIndex}

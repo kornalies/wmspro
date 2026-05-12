@@ -94,6 +94,12 @@ function formatReceivedDate(value: string) {
   }).format(date)
 }
 
+function formatLocation(stock: Pick<StockItem, "bin_location" | "zone_name">) {
+  const location = stock.bin_location?.trim() || stock.zone_name?.trim()
+  if (!location || location === "//") return "Unassigned"
+  return location
+}
+
 export function StockSearch() {
   const PAGE_SIZE = 50
   const router = useRouter()
@@ -127,7 +133,7 @@ export function StockSearch() {
 
   const { data, isLoading } = useStockSearch<StockItem>(appliedFilters, currentPage, PAGE_SIZE)
   const warehouses = warehousesQuery.data ?? []
-  const clients = clientsQuery.data ?? []
+  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data])
   const clientSuggestions = useMemo(() => clients.map(getClientLabel), [clients])
   const rows = data?.rows ?? []
   const summary = data?.summary ?? { in_stock: 0, reserved: 0, dispatched: 0, avg_age_days: 0 }
@@ -464,7 +470,7 @@ export function StockSearch() {
                     <TableCell className="min-w-40">{stock.client_name}</TableCell>
                     <TableCell className="min-w-48">{stock.warehouse_name}</TableCell>
                     <TableCell className="min-w-48 font-mono text-xs text-slate-700 dark:text-slate-300">
-                      {stock.bin_location || stock.zone_name}
+                      {formatLocation(stock)}
                     </TableCell>
                     <TableCell>{getStatusBadge(stock.status)}</TableCell>
                     <TableCell className="whitespace-nowrap">{formatReceivedDate(stock.received_date)}</TableCell>
@@ -571,7 +577,7 @@ export function StockSearch() {
               <p className="text-slate-500 dark:text-slate-400">Warehouse</p>
               <p>{selectedStock.warehouse_name}</p>
               <p className="text-slate-500 dark:text-slate-400">Location</p>
-              <p>{selectedStock.bin_location || selectedStock.zone_name}</p>
+              <p>{formatLocation(selectedStock)}</p>
               <p className="text-slate-500 dark:text-slate-400">Status</p>
               <div>{getStatusBadge(selectedStock.status)}</div>
               <p className="text-slate-500 dark:text-slate-400">Received</p>

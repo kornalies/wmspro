@@ -126,7 +126,6 @@ export default function TransferForm() {
   const [serialFilter, setSerialFilter] = useState(initialSerialFilter)
   const [itemFilter, setItemFilter] = useState(initialItemFilter)
   const [clientSearch, setClientSearch] = useState("")
-  const [clientId, setClientId] = useState("all")
   const [fromZoneLayoutId, setFromZoneLayoutId] = useState(initialFromZoneLayoutId)
   const [fromBinSearch, setFromBinSearch] = useState<string | null>(null)
   const [toZoneLayoutId, setToZoneLayoutId] = useState("")
@@ -184,9 +183,9 @@ export default function TransferForm() {
     },
   })
 
-  const warehouses = warehousesQuery.data ?? []
-  const clients = clientsQuery.data ?? []
-  const layouts = layoutsQuery.data ?? []
+  const warehouses = useMemo(() => warehousesQuery.data ?? [], [warehousesQuery.data])
+  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data])
+  const layouts = useMemo(() => layoutsQuery.data ?? [], [layoutsQuery.data])
   const stockRows = useMemo(() => (stockQuery.data as PutawayStockRow[] | undefined) ?? [], [stockQuery.data])
 
   const warehouseSuggestions = useMemo(() => warehouses.map((warehouse) => warehouse.warehouse_name), [warehouses])
@@ -303,7 +302,6 @@ export default function TransferForm() {
 
   const applyFilters = () => {
     const nextClientId = resolveClientId(clientSearch)
-    setClientId(nextClientId)
     setApplied({
       serial: serialFilter.trim(),
       item: itemFilter.trim(),
@@ -316,7 +314,6 @@ export default function TransferForm() {
     setSerialFilter("")
     setItemFilter("")
     setClientSearch("")
-    setClientId("all")
     setQuickFilter("all")
     setApplied({ serial: "", item: "", clientId: "all", quickFilter: "all" })
   }

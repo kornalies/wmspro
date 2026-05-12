@@ -675,7 +675,13 @@ export default function ReportsPage() {
                             </TableCell>
                           ))}
                           <TableCell className="text-right">
-                            <Button variant="ghost" size="icon-sm" title="Drill down to source records" onClick={() => toast.info("Drill-down view can open the source transaction screen when record IDs are exposed by the report API.")}>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              title="Drill down to source records"
+                              aria-label={`Drill down into report row ${index + 1}`}
+                              onClick={() => toast.info("Drill-down view can open the source transaction screen when record IDs are exposed by the report API.")}
+                            >
                               <Eye className="h-4 w-4" />
                             </Button>
                           </TableCell>

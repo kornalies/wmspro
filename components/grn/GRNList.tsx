@@ -443,7 +443,17 @@ export function GRNList() {
           <span>{selectedRows.length} GRN(s) selected</span>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => exportRows("csv")}>Export Selected</Button>
-            <Button variant="outline" size="sm" onClick={() => toast.info("Bulk print can be wired to a combined PDF once print API supports multiple GRNs.")}>Print Selected</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                selectedRows.length === 1
+                  ? window.location.assign(`/grn/print/${selectedRows[0].id}`)
+                  : toast.info("Select one GRN to print, or use each row's print action.")
+              }
+            >
+              Print Selected
+            </Button>
             <Button variant="outline" size="sm" onClick={() => selectedRows.find((row) => row.status === "DRAFT") ? setConfirmTarget(selectedRows.find((row) => row.status === "DRAFT") ?? null) : toast.info("No draft GRNs selected")}>Confirm Draft</Button>
           </div>
         </div>
@@ -485,16 +495,16 @@ export function GRNList() {
                   ))}
                   <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
-                      <Button asChild variant="ghost" size="icon-sm" title="View GRN"><Link href={`/grn/${grn.id}`}><Eye className="h-4 w-4" /></Link></Button>
-                      <Button asChild variant="ghost" size="icon-sm" title="Print GRN"><Link href={`/grn/print/${grn.id}`}><FileText className="h-4 w-4" /></Link></Button>
+                      <Button asChild variant="ghost" size="icon-sm" title="View GRN" aria-label={`View GRN ${grn.grn_number}`}><Link href={`/grn/${grn.id}`}><Eye className="h-4 w-4" /></Link></Button>
+                      <Button asChild variant="ghost" size="icon-sm" title="Print GRN" aria-label={`Print GRN ${grn.grn_number}`}><Link href={`/grn/print/${grn.id}`}><FileText className="h-4 w-4" /></Link></Button>
                       {grn.status === "DRAFT" ? (
                         <>
-                          <Button asChild variant="ghost" size="icon-sm" title="Edit Draft"><Link href={`/grn/${grn.id}/edit`}><Pencil className="h-4 w-4 text-amber-700" /></Link></Button>
-                          <Button variant="ghost" size="icon-sm" title="Confirm Draft" disabled={confirmDraftMutation.isPending} onClick={() => setConfirmTarget(grn)}><CheckCircle2 className="h-4 w-4 text-green-600" /></Button>
+                          <Button asChild variant="ghost" size="icon-sm" title="Edit Draft" aria-label={`Edit draft GRN ${grn.grn_number}`}><Link href={`/grn/${grn.id}/edit`}><Pencil className="h-4 w-4 text-amber-700" /></Link></Button>
+                          <Button variant="ghost" size="icon-sm" title="Confirm Draft" aria-label={`Confirm draft GRN ${grn.grn_number}`} disabled={confirmDraftMutation.isPending} onClick={() => setConfirmTarget(grn)}><CheckCircle2 className="h-4 w-4 text-green-600" /></Button>
                         </>
                       ) : null}
-                      <Button variant="ghost" size="icon-sm" title="Cancel GRN" disabled={cancelMutation.isPending || grn.status === "CANCELLED"} onClick={() => setCancelTarget(grn)}><XCircle className="h-4 w-4 text-red-600" /></Button>
-                      <Button variant="ghost" size="icon-sm" title="More actions" onClick={() => toast.info("More actions: attachments, audit trail, and lifecycle timeline can open from the detail page.")}><MoreHorizontal className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon-sm" title="Cancel GRN" aria-label={`Cancel GRN ${grn.grn_number}`} disabled={cancelMutation.isPending || grn.status === "CANCELLED"} onClick={() => setCancelTarget(grn)}><XCircle className="h-4 w-4 text-red-600" /></Button>
+                      <Button variant="ghost" size="icon-sm" title="More actions" aria-label={`More actions for GRN ${grn.grn_number}`} onClick={() => toast.info("Open the GRN detail page for attachments, audit trail, and lifecycle timeline.")}><MoreHorizontal className="h-4 w-4" /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
