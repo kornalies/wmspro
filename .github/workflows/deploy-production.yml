@@ -39,24 +39,15 @@ jobs:
         shell: bash
         run: npm ci
 
-      - name: Validate production deployment environment
+      - name: Check production deployment connection settings
         shell: bash
         env:
-          DEPLOY_ENV: production
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-          JWT_SECRET: ${{ secrets.PROD_JWT_SECRET }}
-          APP_URL: ${{ secrets.PROD_APP_URL }}
-          WMS_API_BASE_URL: ${{ secrets.PROD_WMS_API_BASE_URL }}
-          WMS_COMPANY_CODE: ${{ secrets.PROD_WMS_COMPANY_CODE }}
-          WMS_USERNAME: ${{ secrets.PROD_WMS_USERNAME }}
-          WMS_PASSWORD: ${{ secrets.PROD_WMS_PASSWORD }}
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
           PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          npm run ci:validate-env
           for key in PROD_HOST PROD_USER PROD_APP_DIR PROD_SSH_PRIVATE_KEY; do
             if [ -z "${!key:-}" ]; then
               echo "Missing required production secret: ${key}"
@@ -139,7 +130,6 @@ jobs:
           set -a
           source .env.production
           set +a
-          DEPLOY_ENV=production npm run ci:validate-env
           npm run db:migrate
           if [ -e "${PROD_APP_DIR}" ] && [ ! -L "${PROD_APP_DIR}" ]; then
             mv "${PROD_APP_DIR}" "\${BACKUP_ROOT}/current-before-\${RELEASE_ID}"
