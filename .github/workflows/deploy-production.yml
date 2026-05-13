@@ -130,6 +130,7 @@ jobs:
           set -a
           source .env.production
           set +a
+          DEPLOY_ENV=production npm run ci:validate-env
           npm run db:migrate
           if [ -e "${PROD_APP_DIR}" ] && [ ! -L "${PROD_APP_DIR}" ]; then
             mv "${PROD_APP_DIR}" "\${BACKUP_ROOT}/current-before-\${RELEASE_ID}"
