@@ -149,9 +149,9 @@ export function useReverseDO() {
     onSuccess: (_, payload) => {
       qc.invalidateQueries({ queryKey: ["dos"] })
       qc.invalidateQueries({ queryKey: ["do", payload.id] })
-      toast.success("DO reversed and stock restored")
+      toast.success("DO cancelled and cleanup completed")
     },
-    onError: (error) => handleError(error, "Failed to reverse delivery order"),
+    onError: (error) => handleError(error, "Failed to cancel or reverse delivery order"),
   })
 }
 

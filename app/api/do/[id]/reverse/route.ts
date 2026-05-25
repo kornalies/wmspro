@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 
 import { getSession, requirePermission } from "@/lib/auth"
+import { ensureAccountingSchema } from "@/lib/db-bootstrap"
 import { getClient, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { writeAudit } from "@/lib/audit"
@@ -165,16 +166,32 @@ export async function POST(request: NextRequest, context: RouteContext) {
        WHERE company_id = $2
          AND source_type = 'DO'
          AND source_doc_id = $3
-         AND status = 'UNBILLED'
+         AND status IN ('UNBILLED', 'UNRATED')
        RETURNING id`,
       [session.userId ?? null, session.companyId, doId]
     )
     const voidedBillingCount = voidBillingRes.rowCount || 0
 
+    await ensureAccountingSchema(db)
+    const ledgerCleanupRes = await db.query(
+      `DELETE FROM journal_entries
+       WHERE company_id = $1
+         AND source_module = 'DO'
+         AND entry_type = 'DO_DISPATCH'
+         AND external_ref = $2`,
+      [session.companyId, `DO-${doId}-DISPATCH`]
+    )
+    const removedLedgerEntryCount = ledgerCleanupRes.rowCount || 0
+
     await db.query(
       `UPDATE do_header
        SET status = 'CANCELLED',
            total_quantity_dispatched = 0,
+           dispatched_qty = 0,
+           quantity_difference = CASE
+             WHEN invoice_qty IS NULL THEN NULL
+             ELSE invoice_qty
+           END,
            updated_at = CURRENT_TIMESTAMP
        WHERE company_id = $1
          AND id = $2`,
@@ -198,6 +215,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           total_quantity_dispatched: 0,
           restored_stock_count: restoredStockCount,
           voided_billing_tx_count: voidedBillingCount,
+          removed_ledger_entry_count: removedLedgerEntryCount,
           reason: payload.reason || null,
         },
         req: request,
@@ -212,6 +230,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         status: "CANCELLED",
         restored_stock_count: restoredStockCount,
         voided_billing_tx_count: voidedBillingCount,
+        removed_ledger_entry_count: removedLedgerEntryCount,
       },
       "DO reversed successfully"
     )
