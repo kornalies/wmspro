@@ -84,6 +84,22 @@ const zoneLayoutDDL = [
 const stockPutawayDDL = [
   "ALTER TABLE stock_serial_numbers ADD COLUMN IF NOT EXISTS zone_layout_id INTEGER REFERENCES warehouse_zone_layouts(id)",
   "ALTER TABLE stock_serial_numbers ADD COLUMN IF NOT EXISTS bin_location VARCHAR(200)",
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_constraint
+      WHERE conrelid = 'stock_serial_numbers'::regclass
+        AND conname = 'stock_serial_numbers_status_check'
+        AND pg_get_constraintdef(oid) LIKE '%CANCELLED%'
+    ) THEN
+      ALTER TABLE stock_serial_numbers DROP CONSTRAINT IF EXISTS stock_serial_numbers_status_check;
+      ALTER TABLE stock_serial_numbers
+        ADD CONSTRAINT stock_serial_numbers_status_check
+        CHECK (status IN ('IN_STOCK', 'RESERVED', 'DISPATCHED', 'CANCELLED'));
+    END IF;
+  END
+  $$`,
   "CREATE INDEX IF NOT EXISTS idx_stock_serial_numbers_zone_layout ON stock_serial_numbers(zone_layout_id)",
 ]
 

@@ -133,9 +133,10 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       await db.query("ROLLBACK")
       return fail("NOT_FOUND", "GRN not found", 404)
     }
-    if (grnRow.rows[0].status === "CANCELLED") {
+    const currentStatus = String(grnRow.rows[0].status || "").toUpperCase()
+    if (currentStatus !== "DRAFT") {
       await db.query("ROLLBACK")
-      return fail("INVALID_STATUS", "Cancelled GRN cannot be edited", 400)
+      return fail("INVALID_STATUS", "Only draft GRN can be edited or confirmed from this route", 409)
     }
 
     await db.query(
@@ -406,13 +407,18 @@ export async function DELETE(_: NextRequest, context: RouteContext) {
         )
       }
 
-      const deleteStockRes = await db.query(
-        `DELETE FROM stock_serial_numbers
+      const reverseStockRes = await db.query(
+        `UPDATE stock_serial_numbers
+         SET status = 'CANCELLED',
+             do_line_item_id = NULL,
+             dispatched_date = NULL
          WHERE company_id = $1
-           AND grn_line_item_id = ANY($2::int[])`,
+           AND grn_line_item_id = ANY($2::int[])
+           AND status <> 'CANCELLED'
+         RETURNING id`,
         [session.companyId, lineIds]
       )
-      reversedStockCount = deleteStockRes.rowCount || 0
+      reversedStockCount = reverseStockRes.rowCount || 0
     }
 
     const voidBillingRes = await db.query(
