@@ -58,7 +58,7 @@ type StockItem = {
   rack_name?: string
   bin_name?: string
   bin_location?: string
-  status: "IN_STOCK" | "RESERVED" | "DISPATCHED"
+  status: "IN_STOCK" | "RESERVED" | "DISPATCHED" | "CANCELLED"
   received_date: string
   age_days: number
 }
@@ -205,6 +205,7 @@ export function StockSearch() {
       IN_STOCK: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200",
       RESERVED: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200",
       DISPATCHED: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200",
+      CANCELLED: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200",
     }
     return (
       <Badge
@@ -334,6 +335,7 @@ export function StockSearch() {
                 <SelectItem value="IN_STOCK">In Stock</SelectItem>
                 <SelectItem value="RESERVED">Reserved</SelectItem>
                 <SelectItem value="DISPATCHED">Dispatched</SelectItem>
+                <SelectItem value="CANCELLED">Cancelled</SelectItem>
               </SelectContent>
             </Select>
           </div>
