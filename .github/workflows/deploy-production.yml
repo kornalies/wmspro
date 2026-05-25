@@ -69,6 +69,39 @@ jobs:
           WMS_PASSWORD: ${{ secrets.PROD_WMS_PASSWORD }}
         run: npm run build
 
+      - name: Create production runtime env override
+        shell: bash
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          PROD_JWT_SECRET: ${{ secrets.PROD_JWT_SECRET }}
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_WMS_API_BASE_URL: ${{ secrets.PROD_WMS_API_BASE_URL }}
+          PROD_WMS_COMPANY_CODE: ${{ secrets.PROD_WMS_COMPANY_CODE }}
+          PROD_WMS_USERNAME: ${{ secrets.PROD_WMS_USERNAME }}
+          PROD_WMS_PASSWORD: ${{ secrets.PROD_WMS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs")
+
+          const values = {
+            DATABASE_URL: process.env.PROD_DATABASE_URL,
+            JWT_SECRET: process.env.PROD_JWT_SECRET,
+            APP_URL: process.env.PROD_APP_URL,
+            NEXT_PUBLIC_APP_URL: process.env.PROD_APP_URL,
+            WMS_API_BASE_URL: process.env.PROD_WMS_API_BASE_URL,
+            WMS_COMPANY_CODE: process.env.PROD_WMS_COMPANY_CODE,
+            WMS_USERNAME: process.env.PROD_WMS_USERNAME,
+            WMS_PASSWORD: process.env.PROD_WMS_PASSWORD,
+          }
+
+          const body = Object.entries(values)
+            .map(([key, value]) => `${key}=${JSON.stringify(String(value || ""))}`)
+            .join("\n")
+
+          fs.writeFileSync(".env.production.ci", `${body}\n`, { mode: 0o600 })
+          NODE
+
       - name: Setup SSH key
         shell: bash
         run: |
@@ -123,6 +156,10 @@ jobs:
           else
             echo "Missing ${PROD_APP_DIR}/.env.production"
             exit 1
+          fi
+          if [ -f "\${RELEASE_DIR}/.env.production.ci" ]; then
+            cat "\${RELEASE_DIR}/.env.production.ci" >> "\${RELEASE_DIR}/.env.production"
+            rm -f "\${RELEASE_DIR}/.env.production.ci"
           fi
           chown -R wms:wms "\${RELEASE_DIR}"
           cd "\${RELEASE_DIR}"
