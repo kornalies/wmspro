@@ -71,7 +71,7 @@ export interface StockSerialNumber {
   client_id: number
   warehouse_id: number
   zone_id?: number
-  status: "IN_STOCK" | "RESERVED" | "DISPATCHED"
+  status: "IN_STOCK" | "RESERVED" | "DISPATCHED" | "CANCELLED"
   received_date: string
   grn_header_id?: number
   do_header_id?: number
