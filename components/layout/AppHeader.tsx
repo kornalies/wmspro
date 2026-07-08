@@ -1,17 +1,25 @@
 "use client"
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
-import { LogOut, Menu, Moon, Search, Sun } from "lucide-react"
+import { Bell, LogOut, Menu, Moon, Search, Sun } from "lucide-react"
 import { usePathname, useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { useTheme } from "next-themes"
+import { formatDistanceToNowStrict } from "date-fns"
 
 import { useAuth, useLogout, useSwitchCompany } from "@/hooks/use-auth"
+import {
+  useMarkAllNotificationsRead,
+  useMarkNotificationRead,
+  useNotifications,
+  useUnreadNotificationCount,
+} from "@/hooks/use-notifications"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
 import { handleError } from "@/lib/error-handler"
 import { apiClient } from "@/lib/api-client"
+import { cn } from "@/lib/utils"
 
 type CompanyOption = {
   id: number
@@ -28,8 +36,14 @@ export function AppHeader() {
   const { theme, setTheme } = useTheme()
   const [globalSearchState, setGlobalSearchState] = useState({ value: "", pathname })
   const [showProfileMenu, setShowProfileMenu] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
   const profileMenuRef = useRef<HTMLDivElement | null>(null)
+  const notificationsRef = useRef<HTMLDivElement | null>(null)
   const switchCompanyMutation = useSwitchCompany()
+  const unreadCountQuery = useUnreadNotificationCount()
+  const notificationsQuery = useNotifications("all", 10)
+  const markReadMutation = useMarkNotificationRead()
+  const markAllReadMutation = useMarkAllNotificationsRead()
   const canSwitchCompany =
     user?.permissions?.includes("admin.companies.manage") || user?.role === "SUPER_ADMIN"
   const companiesQuery = useQuery({
@@ -102,10 +116,12 @@ export function AppHeader() {
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
-      if (!profileMenuRef.current) return
       const target = event.target as Node
-      if (!profileMenuRef.current.contains(target)) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(target)) {
         setShowProfileMenu(false)
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(target)) {
+        setShowNotifications(false)
       }
     }
     document.addEventListener("mousedown", onPointerDown)
@@ -183,6 +199,68 @@ export function AppHeader() {
             ))}
           </select>
         )}
+        <div ref={notificationsRef} className="relative">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="relative h-9 w-9"
+            onClick={() => setShowNotifications((prev) => !prev)}
+            title="Notifications"
+            aria-label="Notifications"
+          >
+            <Bell className="h-4 w-4" />
+            {!!unreadCountQuery.data && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white">
+                {unreadCountQuery.data > 9 ? "9+" : unreadCountQuery.data}
+              </span>
+            )}
+          </Button>
+          {showNotifications && (
+            <div className="absolute right-0 z-50 mt-2 w-80 rounded-md border bg-white shadow-lg dark:bg-slate-950">
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <span className="text-sm font-semibold">Notifications</span>
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  onClick={() => markAllReadMutation.mutate()}
+                  disabled={!unreadCountQuery.data || markAllReadMutation.isPending}
+                >
+                  Mark all as read
+                </button>
+              </div>
+              <div className="max-h-80 overflow-y-auto">
+                {notificationsQuery.isLoading && (
+                  <p className="px-3 py-4 text-sm text-muted-foreground">Loading...</p>
+                )}
+                {!notificationsQuery.isLoading && (notificationsQuery.data ?? []).length === 0 && (
+                  <p className="px-3 py-4 text-sm text-muted-foreground">No notifications yet</p>
+                )}
+                {(notificationsQuery.data ?? []).map((n) => (
+                  <button
+                    key={n.id}
+                    type="button"
+                    onClick={() => {
+                      if (!n.read_at) markReadMutation.mutate(n.id)
+                    }}
+                    className={cn(
+                      "flex w-full flex-col items-start gap-0.5 border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-muted",
+                      !n.read_at && "bg-sky-50 dark:bg-sky-950/30"
+                    )}
+                  >
+                    <span className="font-medium">{n.title}</span>
+                    {n.body && (
+                      <span className="text-xs text-muted-foreground">{n.body}</span>
+                    )}
+                    <span className="text-[11px] text-muted-foreground">
+                      {formatDistanceToNowStrict(new Date(n.created_at), { addSuffix: true })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <div ref={profileMenuRef} className="relative">
           <Button
             type="button"
