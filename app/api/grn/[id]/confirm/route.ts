@@ -88,7 +88,36 @@ export async function POST(_: NextRequest, context: RouteContext) {
     }
 
     for (const line of lines) {
-      const serialNumbers = Array.isArray(line.serial_numbers_json) ? line.serial_numbers_json : []
+      let serialNumbers = Array.isArray(line.serial_numbers_json) ? line.serial_numbers_json : []
+
+      // Mobile LP (pallet) receipts capture a quantity but no per-unit serials. When a draft line
+      // has no serials, derive them from the LP(s) linked to this GRN by gate_in + client (and item),
+      // generating one serial per received unit ("<lp_code>-<n>"). This is what makes LP-based mobile
+      // GRNs approvable and materialises the stock that put away later moves. Web GRNs (which supply
+      // their own serials) are unaffected.
+      if (serialNumbers.length === 0 && Number(line.quantity || 0) > 0 && header.gate_in_id) {
+        const lpRes = await db.query(
+          `SELECT lp.lp_code, lp.quantity
+           FROM public.mobile_lp_records lp
+           WHERE lp.gate_in_id = $1
+             AND lp.client_id = $2
+             AND EXISTS (
+               SELECT 1 FROM items i
+               WHERE i.id = $3
+                 AND (UPPER(i.item_code) = UPPER(lp.sku) OR UPPER(i.item_name) LIKE UPPER('%' || lp.sku || '%'))
+             )
+           ORDER BY lp.created_at ASC`,
+          [String(header.gate_in_id), String(header.client_id), Number(line.item_id)]
+        )
+        const derived: string[] = []
+        for (const lp of lpRes.rows) {
+          const lpCode = String(lp.lp_code)
+          const lpQty = Math.max(0, Number(lp.quantity || 0))
+          for (let n = 1; n <= lpQty; n++) derived.push(`${lpCode}-${n}`)
+        }
+        serialNumbers = derived
+      }
+
       if (serialNumbers.length !== Number(line.quantity || 0)) {
         await db.query("ROLLBACK")
         return fail("VALIDATION_ERROR", "Serial count must match line item quantity for all items", 400)
@@ -121,7 +150,8 @@ export async function POST(_: NextRequest, context: RouteContext) {
           `INSERT INTO stock_serial_numbers (
             company_id, serial_number, item_id, client_id, warehouse_id,
             status, received_date, grn_line_item_id, zone_layout_id, bin_location
-          ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8)`,
+          ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8)
+          ON CONFLICT (serial_number, item_id, client_id) DO NOTHING`,
           [
             session.companyId,
             String(serial),
