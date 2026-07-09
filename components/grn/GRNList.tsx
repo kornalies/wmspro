@@ -332,7 +332,7 @@ export function GRNList() {
               onChange={(event) => setSearchInput(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && applySearch()}
               className="pl-9"
-              placeholder="Search GRN, invoice, client"
+              placeholder="Search GRN, invoice, serial no."
             />
           </div>
           <Select
