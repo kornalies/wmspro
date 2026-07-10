@@ -143,10 +143,23 @@ export async function POST(request: NextRequest) {
     requireScope(policy, "warehouse", target.warehouse_id)
     const toBinLocation = `${target.zone_code}/${target.rack_code}/${target.bin_code}`
 
+    // Resolve the destination warehouse_zones id for the stock_movements ledger row. Mobile
+    // put-away writes this table too; mirroring it here keeps the cross-module movement ledger
+    // consistent regardless of which app performed the move (see putaway.service.ts).
+    const toZoneResult = await dbClient.query(
+      `SELECT id FROM warehouse_zones
+       WHERE company_id = $1 AND warehouse_id = $2 AND zone_code = $3
+       LIMIT 1`,
+      [session.companyId, target.warehouse_id, target.zone_code]
+    )
+    const toZoneId: number | null = toZoneResult.rows[0]?.id ?? null
+    // One reference groups all serials moved in this web put-away batch.
+    const batchRef = `WEB-PUTAWAY-${Date.now()}`
+
     const movedRows: Array<{ stock_id: number; serial_number: string }> = []
     for (const stockId of payload.stock_ids) {
       const stockResult = await dbClient.query(
-        `SELECT id, serial_number, item_id, warehouse_id, zone_layout_id, bin_location
+        `SELECT id, serial_number, item_id, client_id, warehouse_id, zone_layout_id, bin_location
          FROM stock_serial_numbers
          WHERE id = $1
            AND status = 'IN_STOCK'
@@ -194,6 +207,34 @@ export async function POST(request: NextRequest) {
         ]
       )
 
+      // Ledger parity with mobile put-away: record the move in stock_movements as a TRANSFER
+      // so cross-module movement reports show web moves the same way they show mobile moves.
+      const movementNo = `MV-PUT-${Date.now()}-${stock.id}`
+      await dbClient.query(
+        `INSERT INTO stock_movements
+          (movement_number, movement_date, serial_number_id, serial_number, item_id, client_id,
+           movement_type, from_warehouse_id, from_zone_id, from_status, to_warehouse_id, to_zone_id,
+           to_status, quantity, reference_number, reason, notes, created_by, created_at, company_id,
+           is_system_generated)
+         VALUES
+          ($1, NOW(), $2, $3, $4, $5, 'TRANSFER', $6, NULL, 'IN_STOCK', $7, $8, 'IN_STOCK', $9, $10,
+           'PUTAWAY_MANUAL', $11, $12, NOW(), $13, false)`,
+        [
+          movementNo,
+          stock.id,
+          stock.serial_number,
+          stock.item_id,
+          stock.client_id,
+          stock.warehouse_id,
+          target.warehouse_id,
+          toZoneId,
+          1,
+          batchRef,
+          `Serial ${stock.serial_number} put to ${toBinLocation}`,
+          session.userId,
+        ]
+      )
+
       movedRows.push({ stock_id: stock.id, serial_number: stock.serial_number })
     }
 
@@ -216,6 +257,25 @@ export async function POST(request: NextRequest) {
     )
 
     await dbClient.query("COMMIT")
+
+    // Best-effort: keep the mobile LP lifecycle in sync. A serial whose serial_number matches a
+    // mobile_lp_records.lp_code originated from the mobile LP-receiving flow; mark that LP put
+    // away so it doesn't stay stuck at 'RECEIVED' after a web-side move. Non-fatal and runs
+    // post-commit -- the stock move itself is already durable.
+    if (movedRows.length) {
+      try {
+        await dbClient.query(
+          `UPDATE public.mobile_lp_records
+           SET status = 'PUTAWAY_CONFIRMED', updated_at = NOW()
+           WHERE lp_code = ANY($1::text[])
+             AND status <> 'PUTAWAY_CONFIRMED'`,
+          [movedRows.map((m) => m.serial_number)]
+        )
+      } catch {
+        // mobile_lp_records may not be present/reachable in every environment; ignore.
+      }
+    }
+
     return ok(
       {
         moved_count: movedRows.length,

@@ -500,7 +500,21 @@ export async function GET(request: NextRequest) {
 
     if (search) {
       whereConditions.push(
-        `(gh.grn_number ILIKE $${paramIndex} OR gh.invoice_number ILIKE $${paramIndex})`
+        `(gh.grn_number ILIKE $${paramIndex}
+          OR gh.invoice_number ILIKE $${paramIndex}
+          OR EXISTS (
+            SELECT 1
+            FROM grn_line_items gli
+            LEFT JOIN stock_serial_numbers ssn
+              ON ssn.grn_line_item_id = gli.id
+             AND ssn.company_id = gli.company_id
+            WHERE gli.grn_header_id = gh.id
+              AND gli.company_id = gh.company_id
+              AND (
+                ssn.serial_number ILIKE $${paramIndex}
+                OR gli.serial_numbers_json::text ILIKE $${paramIndex}
+              )
+          ))`
       )
       params.push(`%${search}%`)
       paramIndex++

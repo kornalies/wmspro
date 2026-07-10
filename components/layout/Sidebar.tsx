@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { canAccessPath } from '@/lib/route-permissions'
 import {
     LayoutDashboard,
+    Bell,
     PackagePlus,
     PackageMinus,
     Search,
@@ -65,6 +66,12 @@ const sections: SidebarSection[] = [
                 icon: BarChart3,
                 href: '/reports',
                 color: 'text-yellow-500',
+            },
+            {
+                label: 'Notifications',
+                icon: Bell,
+                href: '/notifications',
+                color: 'text-red-400',
             },
         ],
     },
