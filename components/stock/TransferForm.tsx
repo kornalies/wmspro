@@ -11,6 +11,7 @@ import {
   PackageCheck,
   Search,
   Send,
+  Sparkles,
   X,
 } from "lucide-react"
 import { useSearchParams } from "next/navigation"
@@ -18,6 +19,7 @@ import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
 import { handleError } from "@/lib/error-handler"
+import { zoneTypeLabel } from "@/lib/zone-layouts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -58,6 +60,19 @@ type ClientOption = {
   id: number
   client_code?: string
   client_name?: string
+}
+
+type SuggestedBin = {
+  id: number
+  zone_code: string
+  zone_name: string
+  zone_type: string
+  rack_code: string
+  bin_code: string
+  capacity_units: number | null
+  occupied: number
+  free_units: number | null
+  bin_location: string
 }
 
 type PutawayStockRow = {
@@ -140,6 +155,8 @@ export default function TransferForm() {
   })
   const [selectedStockIds, setSelectedStockIds] = useState<number[]>([])
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [suggestions, setSuggestions] = useState<SuggestedBin[]>([])
+  const [suggestOpen, setSuggestOpen] = useState(false)
 
   const warehousesQuery = useQuery({
     queryKey: ["warehouses", "active"],
@@ -284,6 +301,31 @@ export default function TransferForm() {
     onError: (error) => handleError(error, "Put away transfer failed"),
   })
 
+  const suggestMutation = useMutation({
+    mutationFn: async () => {
+      const qty = Math.max(1, selectedMoveRows.length)
+      const res = await apiClient.get<SuggestedBin[]>(
+        `/stock/putaway/suggest?warehouse_id=${warehouseId}&qty=${qty}`
+      )
+      return res.data ?? []
+    },
+    onSuccess: (data) => {
+      setSuggestions(data)
+      setSuggestOpen(true)
+      if (data.length === 0) {
+        toast.info("No available bin has room for this quantity. Free up space or add capacity.")
+      }
+    },
+    onError: (error) => handleError(error, "Could not suggest a bin"),
+  })
+
+  const applySuggestion = (bin: SuggestedBin) => {
+    setToZoneLayoutId(String(bin.id))
+    setToBinSearch(bin.bin_location)
+    setSelectedStockIds([])
+    setSuggestOpen(false)
+  }
+
   const toggleSelection = (row: PutawayStockRow) => {
     const isSameDestination = toZoneLayoutId && String(row.zone_layout_id || "") === toZoneLayoutId
     if (isSameDestination) return
@@ -401,20 +443,84 @@ export default function TransferForm() {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>To Bin *</Label>
-              {!toZoneLayoutId && <span className="text-xs font-medium text-rose-600">Required</span>}
+              <div className="flex items-center gap-2">
+                {!toZoneLayoutId && <span className="text-xs font-medium text-rose-600">Required</span>}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs text-blue-600 hover:text-blue-700"
+                  disabled={!warehouseId || suggestMutation.isPending}
+                  onClick={() => suggestMutation.mutate()}
+                  title="Suggest the best available bin"
+                >
+                  {suggestMutation.isPending ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-1 h-3 w-3" />
+                  )}
+                  Suggest
+                </Button>
+              </div>
             </div>
-            <TypeaheadInput
-              value={toBinSearch}
-              onValueChange={(value) => {
-                setToBinSearch(value)
-                setToZoneLayoutId(resolveBinId(value))
-                setSelectedStockIds([])
-              }}
-              suggestions={binSuggestions}
-              placeholder="Search destination bin"
-              disabled={!warehouseId}
-              className={!toZoneLayoutId ? "border-rose-200 bg-rose-50/40" : ""}
-            />
+            <div className="relative">
+              <TypeaheadInput
+                value={toBinSearch}
+                onValueChange={(value) => {
+                  setToBinSearch(value)
+                  setToZoneLayoutId(resolveBinId(value))
+                  setSelectedStockIds([])
+                }}
+                suggestions={binSuggestions}
+                placeholder="Search destination bin"
+                disabled={!warehouseId}
+                className={!toZoneLayoutId ? "border-rose-200 bg-rose-50/40" : ""}
+              />
+              {suggestOpen && suggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full rounded-md border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-950">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-xs text-slate-500 dark:border-slate-800">
+                    <span>Suggested bins · best fit for {Math.max(1, selectedMoveRows.length)} unit(s)</span>
+                    <button type="button" onClick={() => setSuggestOpen(false)} aria-label="Close suggestions">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <ul className="max-h-64 overflow-auto py-1">
+                    {suggestions.map((bin, index) => (
+                      <li key={bin.id}>
+                        <button
+                          type="button"
+                          onClick={() => applySuggestion(bin)}
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-sm font-medium text-slate-950 dark:text-slate-50">
+                                {bin.bin_location}
+                              </span>
+                              {index === 0 && (
+                                <Badge className="bg-emerald-100 text-emerald-700">Best</Badge>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {zoneTypeLabel(bin.zone_type)} · {bin.zone_name}
+                            </div>
+                          </div>
+                          <div className="whitespace-nowrap text-right text-xs text-slate-500">
+                            <div className="font-medium text-slate-700 dark:text-slate-300">
+                              {bin.free_units === null ? "Unlimited" : `${bin.free_units} free`}
+                            </div>
+                            <div>
+                              {bin.occupied}
+                              {bin.capacity_units ? `/${bin.capacity_units}` : ""} used
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -457,7 +563,6 @@ export default function TransferForm() {
               value={clientSearch}
               onValueChange={(value) => {
                 setClientSearch(value)
-                setClientId(resolveClientId(value))
               }}
               suggestions={clientSuggestions}
               maxSuggestions={100}
