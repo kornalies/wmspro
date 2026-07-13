@@ -64,7 +64,11 @@ export async function GET(_: NextRequest, context: RouteContext) {
            FROM stock_serial_numbers
            WHERE grn_line_item_id = gli.id),
           CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code)
-        ) as effective_bin_location
+        ) as effective_bin_location,
+        (SELECT string_agg(lp.lp_code || ' (x' || lp.quantity || ')', ', ' ORDER BY lp.created_at)
+         FROM mobile_lp_records lp
+         WHERE lp.gate_in_id = gh.gate_in_id::text
+           AND UPPER(lp.sku) = UPPER(i.item_code)) AS pallet_refs
       FROM grn_line_items gli
       JOIN grn_header gh ON gh.id = gli.grn_header_id
       JOIN items i ON gli.item_id = i.id AND i.company_id = gh.company_id
