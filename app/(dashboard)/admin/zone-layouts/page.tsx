@@ -22,6 +22,14 @@ import { useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
+import {
+  BIN_STATUSES,
+  binStatusLabel,
+  DEFAULT_BIN_STATUS,
+  DEFAULT_ZONE_TYPE,
+  ZONE_TYPES,
+  zoneTypeLabel,
+} from "@/lib/zone-layouts"
 import { exportZoneLayoutsToExcel, exportZoneLayoutTemplateToExcel } from "@/lib/export-utils"
 import { useDeleteAdminResource, useSaveAdminResource } from "@/hooks/use-admin"
 import { Badge } from "@/components/ui/badge"
@@ -61,10 +69,12 @@ type ZoneLayoutRow = {
   warehouse_name?: string
   zone_code: string
   zone_name: string
+  zone_type: string
   rack_code: string
   rack_name: string
   bin_code: string
   bin_name: string
+  bin_status: string
   capacity_units?: number | null
   stock_count?: number | null
   sort_order?: number
@@ -83,10 +93,12 @@ const emptyForm = {
   warehouse_id: "",
   zone_code: "",
   zone_name: "",
+  zone_type: DEFAULT_ZONE_TYPE as string,
   rack_code: "",
   rack_name: "",
   bin_code: "",
   bin_name: "",
+  bin_status: DEFAULT_BIN_STATUS as string,
   capacity_units: "",
   sort_order: "0",
 }
@@ -252,10 +264,12 @@ export default function ZoneLayoutsPage() {
       warehouse_id: String(row.warehouse_id),
       zone_code: row.zone_code,
       zone_name: row.zone_name,
+      zone_type: row.zone_type || DEFAULT_ZONE_TYPE,
       rack_code: row.rack_code,
       rack_name: row.rack_name,
       bin_code: row.bin_code,
       bin_name: row.bin_name,
+      bin_status: row.bin_status || DEFAULT_BIN_STATUS,
       capacity_units: row.capacity_units?.toString() ?? "",
       sort_order: String(row.sort_order ?? 0),
     })
@@ -268,10 +282,12 @@ export default function ZoneLayoutsPage() {
       warehouse_id: String(row.warehouse_id),
       zone_code: row.zone_code,
       zone_name: row.zone_name,
+      zone_type: row.zone_type || DEFAULT_ZONE_TYPE,
       rack_code: row.rack_code,
       rack_name: row.rack_name,
       bin_code: `${row.bin_code}-COPY`,
       bin_name: `${row.bin_name} Copy`,
+      bin_status: row.bin_status || DEFAULT_BIN_STATUS,
       capacity_units: row.capacity_units?.toString() ?? "",
       sort_order: String((row.sort_order ?? 0) + 1),
     })
@@ -309,10 +325,12 @@ export default function ZoneLayoutsPage() {
       warehouse_id: Number(form.warehouse_id),
       zone_code: normalize(form.zone_code),
       zone_name: form.zone_name.trim(),
+      zone_type: form.zone_type,
       rack_code: normalize(form.rack_code),
       rack_name: form.rack_name.trim(),
       bin_code: normalize(form.bin_code),
       bin_name: form.bin_name.trim(),
+      bin_status: form.bin_status,
       capacity_units: form.capacity_units ? Number(form.capacity_units) : undefined,
       sort_order: Number(form.sort_order || 0),
       ...(editRow ? { id: editRow.id, is_active: editRow.is_active } : {}),
@@ -416,6 +434,23 @@ export default function ZoneLayoutsPage() {
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Zone Type *</Label>
+                  <Select value={form.zone_type} onValueChange={(value) => setForm({ ...form, zone_type: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select zone function" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ZONE_TYPES.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {zoneTypeLabel(type)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-500">Defines the zone&apos;s function in the warehouse flow (receiving, storage, picking, dispatch, etc.).</p>
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Rack Code *</Label>
@@ -436,6 +471,23 @@ export default function ZoneLayoutsPage() {
                     <Label>Bin Name *</Label>
                     <Input value={form.bin_name} onChange={(e) => setForm({ ...form, bin_name: e.target.value })} />
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Bin Status *</Label>
+                  <Select value={form.bin_status} onValueChange={(value) => setForm({ ...form, bin_status: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select bin status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BIN_STATUSES.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {binStatusLabel(status)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-500">Only <span className="font-medium">Available</span> bins accept put-away. Blocked, on-hold, damaged, and under-count bins stay in the master but are out of the pool.</p>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
@@ -601,6 +653,9 @@ export default function ZoneLayoutsPage() {
                             <div>
                               <div className="font-mono text-sm">{row.zone_code}</div>
                               <div className="text-xs text-slate-500">{row.zone_name}</div>
+                              <Badge variant="outline" className="mt-1 rounded px-1.5 py-0 text-[10px] font-normal">
+                                {zoneTypeLabel(row.zone_type)}
+                              </Badge>
                             </div>
                           </div>
                         </TableCell>
@@ -625,9 +680,21 @@ export default function ZoneLayoutsPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge className={row.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>
-                            {row.is_active ? "Active" : "Inactive"}
-                          </Badge>
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge className={row.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>
+                              {row.is_active ? "Active" : "Inactive"}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={
+                                row.bin_status && row.bin_status !== "AVAILABLE"
+                                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                                  : "border-slate-200 text-slate-600"
+                              }
+                            >
+                              {binStatusLabel(row.bin_status)}
+                            </Badge>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex justify-end gap-1">
@@ -758,6 +825,7 @@ export default function ZoneLayoutsPage() {
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Hierarchy</h3>
                   <div className="mt-3 space-y-3 text-sm">
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Zone</span><span className="text-right font-medium">{detailRow.zone_code} - {detailRow.zone_name}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-slate-500">Zone Type</span><span className="text-right font-medium">{zoneTypeLabel(detailRow.zone_type)}</span></div>
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Rack</span><span className="text-right font-medium">{detailRow.rack_code} - {detailRow.rack_name}</span></div>
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Bin</span><span className="text-right font-medium">{detailRow.bin_code} - {detailRow.bin_name}</span></div>
                   </div>
@@ -767,6 +835,7 @@ export default function ZoneLayoutsPage() {
                   <div className="mt-3 space-y-3 text-sm">
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Capacity</span><span className="text-right font-medium">{detailRow.capacity_units ? `${detailRow.capacity_units.toLocaleString()} units` : "Missing"}</span></div>
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Current Stock</span><span className="text-right font-medium">{Number(detailRow.stock_count || 0).toLocaleString()}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-slate-500">Bin Status</span><Badge variant="outline" className={detailRow.bin_status && detailRow.bin_status !== "AVAILABLE" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 text-slate-600"}>{binStatusLabel(detailRow.bin_status)}</Badge></div>
                     <div className="flex justify-between gap-4"><span className="text-slate-500">Status</span><Badge className={detailRow.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>{detailRow.is_active ? "Active" : "Inactive"}</Badge></div>
                   </div>
                 </div>

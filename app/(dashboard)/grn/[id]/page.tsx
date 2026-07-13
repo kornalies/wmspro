@@ -57,6 +57,8 @@ type GRNDetailsResponse = {
       rate?: number
       amount?: number
       serial_numbers?: string[]
+      remarks?: string
+      pallet_refs?: string
     }>
   }
 }
@@ -214,6 +216,7 @@ export default function GRNDetailsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Item</TableHead>
+                <TableHead>Pallets (LP)</TableHead>
                 <TableHead>Put Away Bin</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead className="text-right">Rate</TableHead>
@@ -227,6 +230,10 @@ export default function GRNDetailsPage() {
                   <TableCell>
                     <div className="font-medium">{item.item_name}</div>
                     <div className="text-xs text-gray-500">{item.item_code}</div>
+                  </TableCell>
+                  <TableCell className="max-w-[220px] text-xs text-gray-600">
+                    {item.pallet_refs ||
+                      (item.remarks ? item.remarks.replace(/^Pallets:\s*/i, "") : "-")}
                   </TableCell>
                   <TableCell className="font-mono text-sm">{item.bin_location || "-"}</TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>

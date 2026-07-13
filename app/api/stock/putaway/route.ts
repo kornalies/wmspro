@@ -5,6 +5,7 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { getClient, query, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { ensurePutawayMovementSchema } from "@/lib/db-bootstrap"
+import { ensureWarehouseZone } from "@/lib/warehouse-zones"
 import { writeAudit } from "@/lib/audit"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
@@ -129,7 +130,8 @@ export async function POST(request: NextRequest) {
     await setTenantContext(dbClient, session.companyId)
 
     const targetZone = await dbClient.query(
-      `SELECT id, warehouse_id, zone_code, rack_code, bin_code
+      `SELECT id, warehouse_id, zone_code, zone_name, zone_type, rack_code, bin_code,
+              capacity_units, bin_status, warehouse_zone_id
        FROM warehouse_zone_layouts
        WHERE id = $1 AND is_active = true`,
       [payload.to_zone_layout_id]
@@ -143,27 +145,85 @@ export async function POST(request: NextRequest) {
     requireScope(policy, "warehouse", target.warehouse_id)
     const toBinLocation = `${target.zone_code}/${target.rack_code}/${target.bin_code}`
 
-    // Resolve the destination warehouse_zones id for the stock_movements ledger row. Mobile
-    // put-away writes this table too; mirroring it here keeps the cross-module movement ledger
-    // consistent regardless of which app performed the move (see putaway.service.ts).
-    const toZoneResult = await dbClient.query(
-      `SELECT id FROM warehouse_zones
-       WHERE company_id = $1 AND warehouse_id = $2 AND zone_code = $3
-       LIMIT 1`,
-      [session.companyId, target.warehouse_id, target.zone_code]
-    )
-    const toZoneId: number | null = toZoneResult.rows[0]?.id ?? null
+    // Only AVAILABLE bins accept put-away. Blocked / on-hold / damaged / under-count
+    // bins stay in the master but are out of the put-away pool.
+    if (target.bin_status && target.bin_status !== "AVAILABLE") {
+      await dbClient.query("ROLLBACK")
+      return fail(
+        "BIN_NOT_AVAILABLE",
+        `Bin ${toBinLocation} is ${String(target.bin_status).toLowerCase()} and cannot accept put-away.`,
+        400
+      )
+    }
+
+    // Capacity guard: reject the batch if it would overfill the destination bin.
+    // Only enforced when the bin has a configured capacity (> 0); bins with no
+    // capacity set are treated as unlimited so existing setups keep working.
+    const capacity = Number(target.capacity_units || 0)
+    if (capacity > 0) {
+      // Serials already sitting in the target bin don't add to occupancy, so only
+      // count the ones that would actually move in (net additions).
+      const incomingResult = await dbClient.query(
+        `SELECT COUNT(*)::int AS incoming
+         FROM stock_serial_numbers
+         WHERE id = ANY($1::int[])
+           AND status = 'IN_STOCK'
+           AND warehouse_id = $2
+           AND zone_layout_id IS DISTINCT FROM $3`,
+        [payload.stock_ids, target.warehouse_id, target.id]
+      )
+      const occupiedResult = await dbClient.query(
+        `SELECT COUNT(*)::int AS occupied
+         FROM stock_serial_numbers
+         WHERE zone_layout_id = $1
+           AND status IN ('IN_STOCK', 'RESERVED')`,
+        [target.id]
+      )
+      const incoming = Number(incomingResult.rows[0]?.incoming || 0)
+      const occupied = Number(occupiedResult.rows[0]?.occupied || 0)
+      if (occupied + incoming > capacity) {
+        await dbClient.query("ROLLBACK")
+        return fail(
+          "CAPACITY_EXCEEDED",
+          `Bin ${toBinLocation} holds ${occupied}/${capacity} units. Moving ${incoming} more would exceed its capacity.`,
+          400
+        )
+      }
+    }
+
+    // Resolve the destination warehouse_zones id for the stock_movements ledger row.
+    // Prefer the layout's linked warehouse_zone_id (reconciled in phase 2); fall back
+    // to provisioning the canonical zone for legacy layouts that predate the link, so
+    // the ledger never silently loses its location the way the old zone_code string
+    // match did.
+    let toZoneId: number = target.warehouse_zone_id ?? 0
+    if (!toZoneId) {
+      toZoneId = await ensureWarehouseZone(dbClient, {
+        companyId: session.companyId,
+        warehouseId: target.warehouse_id,
+        zoneCode: target.zone_code,
+        zoneName: target.zone_name,
+        zoneType: target.zone_type,
+      })
+      // Backfill the link so subsequent put-aways skip the fallback.
+      await dbClient.query(
+        `UPDATE warehouse_zone_layouts SET warehouse_zone_id = $1 WHERE id = $2 AND warehouse_zone_id IS NULL`,
+        [toZoneId, target.id]
+      )
+    }
     // One reference groups all serials moved in this web put-away batch.
     const batchRef = `WEB-PUTAWAY-${Date.now()}`
 
     const movedRows: Array<{ stock_id: number; serial_number: string }> = []
     for (const stockId of payload.stock_ids) {
       const stockResult = await dbClient.query(
-        `SELECT id, serial_number, item_id, client_id, warehouse_id, zone_layout_id, bin_location
-         FROM stock_serial_numbers
-         WHERE id = $1
-           AND status = 'IN_STOCK'
-         FOR UPDATE`,
+        `SELECT ssn.id, ssn.serial_number, ssn.item_id, ssn.client_id, ssn.warehouse_id,
+                ssn.zone_layout_id, ssn.bin_location, zl.warehouse_zone_id AS from_warehouse_zone_id
+         FROM stock_serial_numbers ssn
+         LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id
+         WHERE ssn.id = $1
+           AND ssn.status = 'IN_STOCK'
+         FOR UPDATE OF ssn`,
         [stockId]
       )
 
@@ -178,6 +238,7 @@ export async function POST(request: NextRequest) {
       }
 
       const fromZoneLayoutId = stock.zone_layout_id ? Number(stock.zone_layout_id) : null
+      const fromZoneId = stock.from_warehouse_zone_id ? Number(stock.from_warehouse_zone_id) : null
       const fromBinLocation = stock.bin_location || null
 
       await dbClient.query(
@@ -217,8 +278,8 @@ export async function POST(request: NextRequest) {
            to_status, quantity, reference_number, reason, notes, created_by, created_at, company_id,
            is_system_generated)
          VALUES
-          ($1, NOW(), $2, $3, $4, $5, 'TRANSFER', $6, NULL, 'IN_STOCK', $7, $8, 'IN_STOCK', $9, $10,
-           'PUTAWAY_MANUAL', $11, $12, NOW(), $13, false)`,
+          ($1, NOW(), $2, $3, $4, $5, 'TRANSFER', $6, $7, 'IN_STOCK', $8, $9, 'IN_STOCK', $10, $11,
+           'PUTAWAY_MANUAL', $12, $13, NOW(), $14, false)`,
         [
           movementNo,
           stock.id,
@@ -226,12 +287,14 @@ export async function POST(request: NextRequest) {
           stock.item_id,
           stock.client_id,
           stock.warehouse_id,
+          fromZoneId,
           target.warehouse_id,
           toZoneId,
           1,
           batchRef,
           `Serial ${stock.serial_number} put to ${toBinLocation}`,
           session.userId,
+          session.companyId,
         ]
       )
 

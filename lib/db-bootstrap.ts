@@ -77,8 +77,40 @@ const zoneLayoutDDL = [
   "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS company_id INTEGER DEFAULT NULLIF(current_setting('app.company_id', true), '')::INTEGER REFERENCES companies(id)",
   "UPDATE warehouse_zone_layouts SET company_id = (SELECT id FROM companies ORDER BY id LIMIT 1) WHERE company_id IS NULL",
   "ALTER TABLE warehouse_zone_layouts ALTER COLUMN company_id SET NOT NULL",
+  "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS zone_type VARCHAR(30) NOT NULL DEFAULT 'STORAGE'",
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'warehouse_zone_layouts'::regclass
+        AND conname = 'warehouse_zone_layouts_zone_type_check'
+    ) THEN
+      ALTER TABLE warehouse_zone_layouts
+        ADD CONSTRAINT warehouse_zone_layouts_zone_type_check
+        CHECK (zone_type IN ('RECEIVING','STORAGE','PICKING','PACKING','STAGING','DISPATCH','RETURNS','QC','QUARANTINE','DAMAGE'));
+    END IF;
+  END
+  $$`,
+  "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS bin_status VARCHAR(20) NOT NULL DEFAULT 'AVAILABLE'",
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'warehouse_zone_layouts'::regclass
+        AND conname = 'warehouse_zone_layouts_bin_status_check'
+    ) THEN
+      ALTER TABLE warehouse_zone_layouts
+        ADD CONSTRAINT warehouse_zone_layouts_bin_status_check
+        CHECK (bin_status IN ('AVAILABLE','BLOCKED','HOLD','DAMAGED','COUNTING'));
+    END IF;
+  END
+  $$`,
+  // Link each bin layout to its canonical warehouse_zones row so the movement
+  // ledger (stock_movements.to_zone_id) never has to string-match zone_code.
+  "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS warehouse_zone_id INTEGER REFERENCES warehouse_zones(id)",
   "CREATE UNIQUE INDEX IF NOT EXISTS uq_zone_layout_wh_zone_rack_bin ON warehouse_zone_layouts (company_id, warehouse_id, zone_code, rack_code, bin_code)",
   "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_active ON warehouse_zone_layouts (warehouse_id, is_active)",
+  "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_zone ON warehouse_zone_layouts (warehouse_zone_id)",
 ]
 
 const stockPutawayDDL = [
