@@ -83,7 +83,8 @@ export async function GET() {
          u.warehouse_id,
          w.warehouse_name,
          u.is_active,
-         u.created_at
+         u.created_at,
+         (u.putaway_pin_hash IS NOT NULL) AS has_putaway_pin
        FROM users u
        LEFT JOIN rbac_user_roles rur
          ON rur.user_id = u.id
