@@ -72,6 +72,7 @@ type CompanyRow = {
   storage_used_gb?: number | string
   billing_status?: BillingStatus
   is_active: boolean
+  settings?: { qc_gate_enabled?: boolean; qc_disposition_enabled?: boolean } | null
   users_count?: number
   active_users?: number
   product_codes?: string[]
@@ -118,6 +119,8 @@ function blankForm() {
     admin_password: "",
     is_active: true,
     product_codes: ["WMS"] as string[],
+    qc_gate_enabled: false,
+    qc_disposition_enabled: false,
   }
 }
 
@@ -383,6 +386,8 @@ export default function CompaniesPage() {
       admin_password: "",
       is_active: row.is_active,
       product_codes: Array.isArray(row.product_codes) && row.product_codes.length ? row.product_codes : ["WMS"],
+      qc_gate_enabled: row.settings?.qc_gate_enabled === true,
+      qc_disposition_enabled: row.settings?.qc_disposition_enabled === true,
     })
     setIsDialogOpen(true)
   }
@@ -416,6 +421,10 @@ export default function CompaniesPage() {
         billing_status: form.billing_status,
         is_active: form.is_active,
         product_codes: form.product_codes,
+        settings: {
+          qc_gate_enabled: form.qc_gate_enabled,
+          qc_disposition_enabled: form.qc_disposition_enabled,
+        },
       })
     } else {
       if (!form.admin_username || !form.admin_email || !form.admin_full_name || !form.admin_password) return
@@ -675,6 +684,42 @@ export default function CompaniesPage() {
                     })}
                   </div>
                 </div>
+
+                {editRow && (
+                  <div className="space-y-2">
+                    <Label>QC Options (opt-in)</Label>
+                    <div className="space-y-3 rounded-md border p-3">
+                      <label className="flex items-start gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={form.qc_gate_enabled}
+                          onChange={(e) => setForm({ ...form, qc_gate_enabled: e.target.checked })}
+                        />
+                        <span>
+                          <span className="font-medium">QC gate before put-away</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Block put-away of QC-quarantined LPs until QC releases them.
+                          </span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={form.qc_disposition_enabled}
+                          onChange={(e) => setForm({ ...form, qc_disposition_enabled: e.target.checked })}
+                        />
+                        <span>
+                          <span className="font-medium">QC hold disposition workflow</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Expose disposition actions (release / scrap / return) for held stock.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 {!editRow && (
                   <div className="rounded-md border p-4">
