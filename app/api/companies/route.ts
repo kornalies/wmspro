@@ -34,6 +34,13 @@ const updateCompanySchema = z.object({
   billing_status: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED"]).optional(),
   is_active: z.boolean().optional(),
   product_codes: z.array(z.enum(["WMS", "FF"])).min(1).optional(),
+  // Per-tenant opt-in feature toggles, merged into companies.settings (JSONB).
+  settings: z
+    .object({
+      qc_gate_enabled: z.boolean().optional(),
+      qc_disposition_enabled: z.boolean().optional(),
+    })
+    .optional(),
 })
 
 const KNOWN_PRODUCT_CODES = ["WMS", "FF"] as const
@@ -92,6 +99,7 @@ export async function GET() {
          c.storage_used_gb,
          c.billing_status,
          c.is_active,
+         c.settings,
          c.created_at,
          c.updated_at,
          owner.full_name AS owner_name,
@@ -291,11 +299,12 @@ export async function PUT(request: NextRequest) {
            storage_used_gb = $6,
            billing_status = $7,
            is_active = $8,
+           settings = COALESCE(settings, '{}'::jsonb) || $10::jsonb,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $9
        RETURNING
          id, company_code, company_name, domain, storage_bucket,
-         subscription_plan, storage_used_gb, billing_status, is_active, created_at, updated_at`,
+         subscription_plan, storage_used_gb, billing_status, is_active, settings, created_at, updated_at`,
       [
         payload.company_code.toUpperCase(),
         payload.company_name,
@@ -305,7 +314,9 @@ export async function PUT(request: NextRequest) {
         payload.storage_used_gb ?? 0,
         payload.billing_status || "TRIAL",
         payload.is_active ?? true,
-        payload.id
+        payload.id,
+        // Merge only the provided toggles; an absent `settings` merges {} (no change).
+        JSON.stringify(payload.settings ?? {}),
       ]
     )
 

@@ -90,14 +90,16 @@ export async function POST(_: NextRequest, context: RouteContext) {
     for (const line of lines) {
       let serialNumbers = Array.isArray(line.serial_numbers_json) ? line.serial_numbers_json : []
 
-      // Mobile LP (pallet) receipts capture a quantity but no per-unit serials. When a draft line
-      // has no serials, derive them from the LP(s) linked to this GRN by gate_in + client (and item),
-      // generating one serial per received unit ("<lp_code>-<n>"). This is what makes LP-based mobile
-      // GRNs approvable and materialises the stock that put away later moves. Web GRNs (which supply
-      // their own serials) are unaffected.
-      if (serialNumbers.length === 0 && Number(line.quantity || 0) > 0 && header.gate_in_id) {
+      // Resolve the mobile LP(s) (dock pallet receipts) this line's stock came from, matched by
+      // gate_in + client + item. We need these in BOTH receiving styles, because the LP->stock link
+      // must survive regardless of how the serials were captured:
+      //   - Mobile LP receipt: the line has no serials, so we synthesise one per unit ("<lp_code>-<n>").
+      //   - Web desk confirm: the line already carries the REAL Mfg serials a clerk typed in.
+      // Web GRNs with no gate_in (no LP stage) simply resolve to no LP rows and are unaffected.
+      let lpRows: Array<{ id: string; lp_code: string; quantity: number }> = []
+      if (Number(line.quantity || 0) > 0 && header.gate_in_id) {
         const lpRes = await db.query(
-          `SELECT lp.lp_code, lp.quantity
+          `SELECT lp.id, lp.lp_code, lp.quantity
            FROM public.mobile_lp_records lp
            WHERE lp.gate_in_id = $1
              AND lp.client_id = $2
@@ -109,11 +111,19 @@ export async function POST(_: NextRequest, context: RouteContext) {
            ORDER BY lp.created_at ASC`,
           [String(header.gate_in_id), String(header.client_id), Number(line.item_id)]
         )
+        lpRows = lpRes.rows.map((lp: { id: unknown; lp_code: unknown; quantity: unknown }) => ({
+          id: String(lp.id),
+          lp_code: String(lp.lp_code),
+          quantity: Math.max(0, Number(lp.quantity || 0)),
+        }))
+      }
+
+      // Mobile LP receipt with no per-unit serials: materialise one synthetic serial per received
+      // unit so the stock is approvable and put away later can move it.
+      if (serialNumbers.length === 0 && Number(line.quantity || 0) > 0 && lpRows.length) {
         const derived: string[] = []
-        for (const lp of lpRes.rows) {
-          const lpCode = String(lp.lp_code)
-          const lpQty = Math.max(0, Number(lp.quantity || 0))
-          for (let n = 1; n <= lpQty; n++) derived.push(`${lpCode}-${n}`)
+        for (const lp of lpRows) {
+          for (let n = 1; n <= lp.quantity; n++) derived.push(`${lp.lp_code}-${n}`)
         }
         serialNumbers = derived
       }
@@ -121,6 +131,19 @@ export async function POST(_: NextRequest, context: RouteContext) {
       if (serialNumbers.length !== Number(line.quantity || 0)) {
         await db.query("ROLLBACK")
         return fail("VALIDATION_ERROR", "Serial count must match line item quantity for all items", 400)
+      }
+
+      // Stamp each serial with the LP it belongs to, by walking the pallets in receipt order and
+      // consuming their quantities. Synthetic serials were built in exactly this order; real
+      // desk-entered serials are assigned to pallets positionally (the best linkage available
+      // without per-unit LP scanning at the desk). Serials beyond the LPs' combined quantity
+      // (e.g. a pure web GRN) stay unlinked (null).
+      const lpIdBySerialIndex: Array<string | null> = new Array(serialNumbers.length).fill(null)
+      let lpCursor = 0
+      for (const lp of lpRows) {
+        for (let n = 0; n < lp.quantity && lpCursor < lpIdBySerialIndex.length; n++) {
+          lpIdBySerialIndex[lpCursor++] = lp.id
+        }
       }
 
       let zoneLayoutId: number | null = null
@@ -145,22 +168,23 @@ export async function POST(_: NextRequest, context: RouteContext) {
         binLocation = `${layout.zone_code}/${layout.rack_code}/${layout.bin_code}`
       }
 
-      for (const serial of serialNumbers) {
+      for (let s = 0; s < serialNumbers.length; s++) {
         await db.query(
           `INSERT INTO stock_serial_numbers (
             company_id, serial_number, item_id, client_id, warehouse_id,
-            status, received_date, grn_line_item_id, zone_layout_id, bin_location
-          ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8)
+            status, received_date, grn_line_item_id, zone_layout_id, bin_location, lp_record_id
+          ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8, $9)
           ON CONFLICT (serial_number, item_id, client_id) DO NOTHING`,
           [
             session.companyId,
-            String(serial),
+            String(serialNumbers[s]),
             Number(line.item_id),
             Number(header.client_id),
             Number(header.warehouse_id),
             Number(line.id),
             zoneLayoutId,
             binLocation,
+            lpIdBySerialIndex[s],
           ]
         )
       }

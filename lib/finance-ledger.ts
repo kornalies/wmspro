@@ -351,6 +351,31 @@ async function replaceEntryLines(
   }
 }
 
+/**
+ * Invoice journal entries are keyed by external_ref, not by a foreign key, so an
+ * invoice deleted outside the app (scripts, manual SQL, test teardown) leaves its
+ * INVOICE_ISSUE / INVOICE_PAYMENT entries behind. Those orphans are never
+ * regenerated and never removed, so they permanently distort the trial balance.
+ * Drop any INVOICE-sourced entry whose invoice no longer exists before re-posting.
+ * Scoped to source_module = 'INVOICE'; credit/debit notes post as 'MANUAL'.
+ */
+async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
+  const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
+  if (!normalizedTable.rows[0]?.table_name) return
+
+  await db.query(
+    `DELETE FROM journal_entries je
+      WHERE je.company_id = $1
+        AND je.source_module = 'INVOICE'
+        AND NOT EXISTS (
+          SELECT 1 FROM invoice_header ih
+           WHERE ih.company_id = je.company_id
+             AND ih.id::text = je.source_id
+        )`,
+    [companyId]
+  )
+}
+
 async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?: number) {
   await setTenantContext(db, companyId)
   await ensureAccountingSchema(db)
@@ -367,6 +392,8 @@ async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?:
   if (!ar || !cash || !inventory || !gst || !grnClearing || !sales || !cogs) {
     throw new Error("Missing mandatory chart of accounts entries")
   }
+
+  await pruneOrphanedInvoiceEntries(db, companyId)
 
   const invoices = await fetchInvoiceSourceRows(db, companyId)
   const paymentRows = await fetchInvoicePaymentSourceRows(db, companyId)

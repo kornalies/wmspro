@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useRef, useState, type ReactNode } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
   CheckCircle2,
@@ -73,7 +73,12 @@ type UserRow = {
   mfa_enabled?: boolean
   password_reset_required?: boolean
   locked?: boolean
+  has_putaway_pin?: boolean
 }
+
+// Roles that can hold a put-away override PIN. Must match wms-mobile-api
+// (putaway.service.ts) and the shared-schema index (migration 054).
+const PUTAWAY_APPROVER_ROLES = ["SUPERVISOR", "WAREHOUSE_MANAGER", "ADMIN", "SUPER_ADMIN"]
 
 type ClientOption = {
   id: number
@@ -198,6 +203,8 @@ export default function UsersPage() {
   const [detailsUser, setDetailsUser] = useState<UserRow | null>(null)
   const [actionUser, setActionUser] = useState<UserRow | null>(null)
   const [deactivateUser, setDeactivateUser] = useState<UserRow | null>(null)
+  const [pinUser, setPinUser] = useState<UserRow | null>(null)
+  const [pinValue, setPinValue] = useState("")
   const [roleConfirmOpen, setRoleConfirmOpen] = useState(false)
   const [pendingSave, setPendingSave] = useState<Record<string, unknown> | null>(null)
   const [form, setForm] = useState(blankForm)
@@ -324,6 +331,32 @@ export default function UsersPage() {
       toast.success(`Invite created: ${activationUrl || "link generated"}`)
     },
     onError: (error) => handleError(error, "Failed to create portal invite"),
+  })
+
+  const qc = useQueryClient()
+
+  const setPinMutation = useMutation({
+    mutationFn: async ({ userId, pin }: { userId: number; pin: string }) =>
+      apiClient.post("/users/putaway-pin", { user_id: userId, pin }),
+    onSuccess: (res) => {
+      toast.success(res.message || "Put-away PIN saved")
+      qc.invalidateQueries({ queryKey: ["admin", "users"] })
+      setPinUser(null)
+      setPinValue("")
+    },
+    onError: (error) => handleError(error, "Failed to save put-away PIN"),
+  })
+
+  const clearPinMutation = useMutation({
+    mutationFn: async (userId: number) =>
+      apiClient.delete(`/users/putaway-pin?user_id=${userId}`),
+    onSuccess: () => {
+      toast.success("Put-away PIN cleared")
+      qc.invalidateQueries({ queryKey: ["admin", "users"] })
+      setPinUser(null)
+      setPinValue("")
+    },
+    onError: (error) => handleError(error, "Failed to clear put-away PIN"),
   })
 
   const openCreate = () => {
@@ -686,6 +719,12 @@ export default function UsersPage() {
               <Button variant="outline" onClick={() => { void openPortalAccess(actionUser); setActionUser(null) }}><Link2 className="mr-2 h-4 w-4" />Assign Clients</Button>
               <Button variant="outline" onClick={() => { createInviteMutation.mutate(actionUser.id); setActionUser(null) }} disabled={createInviteMutation.isPending}>Send Invite</Button>
               <Button variant="outline" onClick={() => { toast.success("Password reset flow queued") ; setActionUser(null) }}><KeyRound className="mr-2 h-4 w-4" />Reset Password</Button>
+              {PUTAWAY_APPROVER_ROLES.includes(actionUser.role) && (
+                <Button variant="outline" onClick={() => { setPinUser(actionUser); setPinValue(""); setActionUser(null) }}>
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  {actionUser.has_putaway_pin ? "Reset Put-away PIN" : "Set Put-away PIN"}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 className="text-rose-600"
@@ -697,6 +736,48 @@ export default function UsersPage() {
               {actionUser.role === "SUPER_ADMIN" && <p className="text-xs text-rose-600">Super Admin deactivation is protected.</p>}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pinUser} onOpenChange={(open) => { if (!open) { setPinUser(null); setPinValue("") } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{pinUser?.has_putaway_pin ? "Reset" : "Set"} Put-away PIN</DialogTitle>
+            <DialogDescription>
+              {pinUser?.full_name} ({pinUser ? prettyRole(pinUser.role) : ""}) — used to approve bin-mismatch put-away overrides on the mobile app.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="putaway-pin">New PIN (4–12 digits)</Label>
+            <Input
+              id="putaway-pin"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="••••"
+              value={pinValue}
+              onChange={(e) => setPinValue(e.target.value.replace(/\D/g, "").slice(0, 12))}
+            />
+            <p className="text-xs text-slate-500">Stored securely (hashed). It is never shown again after saving.</p>
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            {pinUser?.has_putaway_pin && (
+              <Button
+                variant="outline"
+                className="text-rose-600"
+                disabled={clearPinMutation.isPending}
+                onClick={() => { if (pinUser) clearPinMutation.mutate(pinUser.id) }}
+              >
+                Clear PIN
+              </Button>
+            )}
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={setPinMutation.isPending || pinValue.length < 4}
+              onClick={() => { if (pinUser) setPinMutation.mutate({ userId: pinUser.id, pin: pinValue }) }}
+            >
+              {pinUser?.has_putaway_pin ? "Reset PIN" : "Set PIN"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

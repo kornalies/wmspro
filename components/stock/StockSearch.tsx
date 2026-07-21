@@ -50,6 +50,7 @@ type StockItem = {
   id: number
   warehouse_id: number
   serial_number: string
+  lp_code?: string | null
   item_name: string
   item_code: string
   client_name: string
@@ -105,6 +106,7 @@ export function StockSearch() {
   const router = useRouter()
   const [filters, setFilters] = useState({
     serial: "",
+    lpId: "",
     item: "",
     clientSearch: "",
     clientId: "all",
@@ -143,6 +145,7 @@ export function StockSearch() {
   const totalPages = Math.max(1, pagination.totalPages)
   const hasActiveFilters =
     Boolean(appliedFilters.serial) ||
+    Boolean(appliedFilters.lpId) ||
     Boolean(appliedFilters.item) ||
     Boolean(appliedFilters.clientSearch) ||
     appliedFilters.status !== "all" ||
@@ -274,7 +277,7 @@ export function StockSearch() {
               Inventory Filters
             </CardTitle>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Narrow results by serial, item, client, warehouse, status, or stock age.
+              Narrow results by serial, LP, item, client, warehouse, status, or stock age.
             </p>
           </div>
           {hasActiveFilters && (
@@ -291,6 +294,17 @@ export function StockSearch() {
               onValueChange={(value) => setFilters({ ...filters, serial: value })}
               suggestions={rows.map((stock) => stock.serial_number)}
               placeholder="Search serial"
+              className="h-10"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>LP ID</Label>
+            <TypeaheadInput
+              value={filters.lpId}
+              onValueChange={(value) => setFilters({ ...filters, lpId: value })}
+              suggestions={rows.map((stock) => stock.lp_code || "").filter(Boolean)}
+              placeholder="Search LP"
               className="h-10"
             />
           </div>
@@ -398,6 +412,7 @@ export function StockSearch() {
               onClick={() => {
                 const reset = {
                   serial: "",
+                  lpId: "",
                   item: "",
                   clientSearch: "",
                   clientId: "all",
@@ -447,6 +462,7 @@ export function StockSearch() {
               <TableHeader>
                 <TableRow className="border-b bg-slate-50/80 hover:bg-slate-50/80 dark:bg-slate-900/60 dark:hover:bg-slate-900/60">
                   <TableHead>Serial Number</TableHead>
+                  <TableHead>LP ID</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Client</TableHead>
                   <TableHead>Warehouse</TableHead>
@@ -462,6 +478,9 @@ export function StockSearch() {
                   <TableRow key={stock.id} className="hover:bg-blue-50/40 dark:hover:bg-blue-950/20">
                     <TableCell className="whitespace-nowrap font-mono text-sm text-slate-800 dark:text-slate-100">
                       {stock.serial_number}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700 dark:text-slate-300">
+                      {stock.lp_code || "-"}
                     </TableCell>
                     <TableCell>
                       <div className="min-w-56">
@@ -505,7 +524,7 @@ export function StockSearch() {
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                    <TableCell colSpan={10} className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                       No stock found for selected filters.
                     </TableCell>
                   </TableRow>
@@ -570,6 +589,8 @@ export function StockSearch() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <p className="text-slate-500 dark:text-slate-400">Serial</p>
               <p className="font-mono">{selectedStock.serial_number}</p>
+              <p className="text-slate-500 dark:text-slate-400">LP ID</p>
+              <p className="font-mono">{selectedStock.lp_code || "-"}</p>
               <p className="text-slate-500 dark:text-slate-400">Item</p>
               <p>{selectedStock.item_name}</p>
               <p className="text-slate-500 dark:text-slate-400">Item Code</p>

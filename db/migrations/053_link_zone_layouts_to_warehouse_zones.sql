@@ -13,6 +13,15 @@
 ALTER TABLE warehouse_zone_layouts
   ADD COLUMN IF NOT EXISTS warehouse_zone_id INTEGER REFERENCES warehouse_zones(id);
 
+-- Both tables have FORCE ROW LEVEL SECURITY, so even the owning migration role is
+-- subject to the per-tenant RLS policy (company_id = app.company_id). A cross-tenant
+-- backfill can't set a single app.company_id, so lift FORCE for the duration of the
+-- backfill and restore it afterwards. This runs inside the migration's transaction,
+-- so a failure rolls the toggle back too. The app role (wms_app) still hits RLS at
+-- runtime -- only this owner-run backfill bypasses it.
+ALTER TABLE warehouse_zones NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_zone_layouts NO FORCE ROW LEVEL SECURITY;
+
 -- 1) Provision a warehouse_zones row for every distinct layout zone that lacks one.
 INSERT INTO warehouse_zones (company_id, warehouse_id, zone_code, zone_name, zone_type, is_active)
 SELECT
@@ -33,6 +42,9 @@ FROM warehouse_zones wz
 WHERE wz.warehouse_id = zl.warehouse_id
   AND wz.zone_code = zl.zone_code
   AND zl.warehouse_zone_id IS DISTINCT FROM wz.id;
+
+ALTER TABLE warehouse_zones FORCE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_zone_layouts FORCE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_zone
   ON warehouse_zone_layouts (warehouse_zone_id);

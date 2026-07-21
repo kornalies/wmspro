@@ -116,6 +116,12 @@ const zoneLayoutDDL = [
 const stockPutawayDDL = [
   "ALTER TABLE stock_serial_numbers ADD COLUMN IF NOT EXISTS zone_layout_id INTEGER REFERENCES warehouse_zone_layouts(id)",
   "ALTER TABLE stock_serial_numbers ADD COLUMN IF NOT EXISTS bin_location VARCHAR(200)",
+  // Link a stock serial back to the mobile LP (pallet) it was received on, so the
+  // LP is resolved via FK rather than the "<lp_code>-<n>" serial-string convention
+  // (which breaks once the desk enters real Mfg serials). FK + backfill live in
+  // migration 059; this plain column keeps dev bootstrap in sync.
+  "ALTER TABLE stock_serial_numbers ADD COLUMN IF NOT EXISTS lp_record_id TEXT",
+  "CREATE INDEX IF NOT EXISTS idx_stock_serial_numbers_lp_record ON stock_serial_numbers(lp_record_id) WHERE lp_record_id IS NOT NULL",
   `DO $$
   BEGIN
     IF NOT EXISTS (

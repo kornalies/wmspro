@@ -400,6 +400,7 @@ export const exportDOsToExcel = (deliveryOrders: Array<any>) => {
  */
 export const exportStockToExcel = (stockData: Array<any>) => {
     const data = stockData.map(stock => ({
+        'LP ID': stock.lp_code || '',
         'Item Code': stock.item_code,
         'Item Name': stock.item_name,
         'Client': stock.client_name,
@@ -630,6 +631,7 @@ export const exportStockMovementsToExcel = (movementData: Array<any>) => {
         'Movement Ref': movement.movement_ref,
         'Moved At': movement.moved_at,
         'Serial Number': movement.serial_number,
+        'LP ID': movement.lp_code || '',
         'Item Code': movement.item_code,
         'Item Name': movement.item_name,
         'Client': movement.client_name,

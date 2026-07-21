@@ -28,6 +28,7 @@ import {
     Rocket,
     Settings2,
     ShieldCheck,
+    ShieldAlert,
     Gauge,
     Cable,
     Bot,
@@ -90,6 +91,12 @@ const sections: SidebarSection[] = [
                 icon: ClipboardCheck,
                 href: '/grn/mobile-approvals',
                 color: 'text-fuchsia-500',
+            },
+            {
+                label: 'QC Holds',
+                icon: ShieldAlert,
+                href: '/grn/qc-holds',
+                color: 'text-amber-500',
             },
             {
                 label: 'DO Processing',

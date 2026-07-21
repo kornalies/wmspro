@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
     const clientId = Number(searchParams.get("client_id") || 0)
     const userId = Number(searchParams.get("user_id") || 0)
     const serial = searchParams.get("serial")?.trim()
+    const lp = searchParams.get("lp")?.trim()
     const item = searchParams.get("item")?.trim()
     const fromBin = searchParams.get("from_bin")?.trim()
     const toBin = searchParams.get("to_bin")?.trim()
@@ -41,6 +42,23 @@ export async function GET(request: NextRequest) {
     if (serial) {
       where.push(`spm.serial_number ILIKE $${idx++}`)
       params.push(`%${serial}%`)
+    }
+    if (lp) {
+      // Match the LP via the stamped FK on the underlying stock row first; fall back to the legacy
+      // naming convention (serial = lp_code OR serial LIKE "<lp_code>-%") for pre-migration-059 stock.
+      where.push(
+        `EXISTS (
+          SELECT 1
+          FROM public.mobile_lp_records lpf
+          WHERE (
+              ssn.lp_record_id = lpf.id
+              OR spm.serial_number = lpf.lp_code
+              OR spm.serial_number LIKE lpf.lp_code || '-%'
+            )
+            AND lpf.lp_code ILIKE $${idx++}
+        )`
+      )
+      params.push(`%${lp}%`)
     }
     if (item) {
       where.push(`(i.item_code ILIKE $${idx} OR i.item_name ILIKE $${idx})`)
@@ -72,6 +90,17 @@ export async function GET(request: NextRequest) {
       JOIN users u ON u.id = spm.moved_by AND u.company_id = spm.company_id
       LEFT JOIN stock_serial_numbers ssn ON ssn.id = spm.stock_serial_id
       LEFT JOIN clients c ON c.id = ssn.client_id
+      -- Preferred: the LP stamped on the underlying stock row at GRN confirm (real Mfg serials too).
+      LEFT JOIN public.mobile_lp_records lpdir ON lpdir.id = ssn.lp_record_id
+      -- Fallback for pre-migration-059 stock that only carries the "<lp_code>-<n>" convention.
+      LEFT JOIN LATERAL (
+        SELECT lpr.lp_code
+        FROM public.mobile_lp_records lpr
+        WHERE spm.serial_number = lpr.lp_code
+           OR spm.serial_number LIKE lpr.lp_code || '-%'
+        ORDER BY LENGTH(lpr.lp_code) DESC
+        LIMIT 1
+      ) lp ON TRUE
       ${whereClause}
     `
 
@@ -111,6 +140,7 @@ export async function GET(request: NextRequest) {
         ('PWM-' || LPAD(spm.id::text, 8, '0')) AS movement_ref,
         spm.stock_serial_id,
         spm.serial_number,
+        COALESCE(lpdir.lp_code, lp.lp_code) AS lp_code,
         i.item_code,
         i.item_name,
         c.client_name,
