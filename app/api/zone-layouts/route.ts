@@ -28,6 +28,31 @@ const zoneLayoutUpdateSchema = zoneLayoutSchema.extend({
   is_active: z.boolean().optional(),
 })
 
+// Bulk create: one rack, many bins. The zone/rack/status/capacity fields are
+// shared across every bin; `bins` carries the per-bin code/name the client
+// generated from a prefix + numeric range.
+const zoneLayoutBulkSchema = z.object({
+  warehouse_id: z.number().positive(),
+  zone_code: z.string().min(1).max(30),
+  zone_name: z.string().min(1).max(100),
+  zone_type: z.enum(ZONE_TYPES).default(DEFAULT_ZONE_TYPE),
+  rack_code: z.string().min(1).max(30),
+  rack_name: z.string().min(1).max(100),
+  bin_status: z.enum(BIN_STATUSES).default(DEFAULT_BIN_STATUS),
+  capacity_units: z.number().int().nonnegative().optional(),
+  sort_order: z.number().int().nonnegative().optional(),
+  attributes: z.record(z.string(), z.unknown()).optional(),
+  bins: z
+    .array(
+      z.object({
+        bin_code: z.string().min(1).max(40),
+        bin_name: z.string().min(1).max(120),
+      })
+    )
+    .min(1)
+    .max(500),
+})
+
 export async function GET(request: NextRequest) {
   try {
     await ensureZoneLayoutSchema()
@@ -100,7 +125,62 @@ export async function POST(request: NextRequest) {
 
   const client = await getClient()
   try {
-    const payload = zoneLayoutSchema.parse(await request.json())
+    const body = await request.json()
+
+    // Bulk path: `{ ...rack, bins: [...] }` inserts many bins under one rack in
+    // a single transaction, resolving the canonical zone just once.
+    if (body && Array.isArray(body.bins)) {
+      const bulk = zoneLayoutBulkSchema.parse(body)
+      const zoneCode = bulk.zone_code.toUpperCase()
+      const rackCode = bulk.rack_code.toUpperCase()
+
+      await client.query("BEGIN")
+      await setTenantContext(client, session.companyId)
+
+      const warehouseZoneId = await ensureWarehouseZone(client, {
+        companyId: session.companyId,
+        warehouseId: bulk.warehouse_id,
+        zoneCode,
+        zoneName: bulk.zone_name,
+        zoneType: bulk.zone_type,
+      })
+
+      let created = 0
+      for (const [index, bin] of bulk.bins.entries()) {
+        const inserted = await client.query(
+          `INSERT INTO warehouse_zone_layouts (
+            warehouse_id, zone_code, zone_name, zone_type, rack_code, rack_name, bin_code, bin_name,
+            bin_status, capacity_units, sort_order, attributes, warehouse_zone_id, is_active
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true)
+          ON CONFLICT (warehouse_id, zone_code, rack_code, bin_code) DO NOTHING`,
+          [
+            bulk.warehouse_id,
+            zoneCode,
+            bulk.zone_name,
+            bulk.zone_type,
+            rackCode,
+            bulk.rack_name,
+            bin.bin_code.toUpperCase(),
+            bin.bin_name,
+            bulk.bin_status,
+            bulk.capacity_units ?? null,
+            (bulk.sort_order ?? 0) + index,
+            bulk.attributes ?? {},
+            warehouseZoneId,
+          ]
+        )
+        created += inserted.rowCount ?? 0
+      }
+
+      await client.query("COMMIT")
+      const skipped = bulk.bins.length - created
+      const message = skipped
+        ? `${created} bin(s) created, ${skipped} skipped (already existed)`
+        : `${created} bin(s) created successfully`
+      return ok({ created, skipped }, message)
+    }
+
+    const payload = zoneLayoutSchema.parse(body)
     const zoneCode = payload.zone_code.toUpperCase()
 
     await client.query("BEGIN")

@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const serial = searchParams.get("serial")?.trim()
+    const lp = searchParams.get("lp")?.trim()
     const item = searchParams.get("item")?.trim()
     const clientId = Number(searchParams.get("client_id") || 0)
     const status = searchParams.get("status")
@@ -29,6 +30,23 @@ export async function GET(request: NextRequest) {
     if (serial) {
       where.push(`ssn.serial_number ILIKE $${idx++}`)
       params.push(`%${serial}%`)
+    }
+    if (lp) {
+      // Match the LP via the stamped FK first; fall back to the legacy naming convention
+      // (serial = lp_code OR serial LIKE "<lp_code>-%") for stock received before migration 059.
+      where.push(
+        `EXISTS (
+          SELECT 1
+          FROM public.mobile_lp_records lpf
+          WHERE (
+              ssn.lp_record_id = lpf.id
+              OR ssn.serial_number = lpf.lp_code
+              OR ssn.serial_number LIKE lpf.lp_code || '-%'
+            )
+            AND lpf.lp_code ILIKE $${idx++}
+        )`
+      )
+      params.push(`%${lp}%`)
     }
     if (item) {
       where.push(
@@ -103,12 +121,24 @@ export async function GET(request: NextRequest) {
           NULLIF(ssn.bin_location, ''),
           NULLIF(CONCAT_WS('/', NULLIF(zl.zone_code, ''), NULLIF(zl.rack_code, ''), NULLIF(zl.bin_code, '')), ''),
           'Unassigned'
-        ) AS bin_location
+        ) AS bin_location,
+        COALESCE(lpdir.lp_code, lp.lp_code) AS lp_code
       FROM stock_serial_numbers ssn
       JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
       JOIN clients c ON c.id = ssn.client_id AND c.company_id = ssn.company_id
       JOIN warehouses w ON w.id = ssn.warehouse_id AND w.company_id = ssn.company_id
       LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id AND zl.company_id = ssn.company_id
+      -- Preferred: the LP stamped on the row at GRN confirm (works for real Mfg serials too).
+      LEFT JOIN public.mobile_lp_records lpdir ON lpdir.id = ssn.lp_record_id
+      -- Fallback for pre-migration-059 stock that only carries the "<lp_code>-<n>" convention.
+      LEFT JOIN LATERAL (
+        SELECT lpr.lp_code
+        FROM public.mobile_lp_records lpr
+        WHERE ssn.serial_number = lpr.lp_code
+           OR ssn.serial_number LIKE lpr.lp_code || '-%'
+        ORDER BY LENGTH(lpr.lp_code) DESC
+        LIMIT 1
+      ) lp ON TRUE
       ${whereClause}
       ORDER BY ssn.received_date DESC
       LIMIT $${limitParamIndex}

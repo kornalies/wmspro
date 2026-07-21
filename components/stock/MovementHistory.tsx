@@ -73,6 +73,7 @@ type MovementRow = {
   movement_ref: string
   stock_serial_id: number
   serial_number: string
+  lp_code?: string | null
   item_code: string
   item_name: string
   client_code?: string
@@ -108,6 +109,7 @@ type Filters = {
   userSearch: string
   userId: string
   serial: string
+  lpId: string
   item: string
   fromBin: string
   toBin: string
@@ -123,6 +125,7 @@ function blankFilters(): Filters {
     userSearch: "",
     userId: "all",
     serial: "",
+    lpId: "",
     item: "",
     fromBin: "",
     toBin: "",
@@ -227,6 +230,7 @@ export default function MovementHistory() {
       if (applied.clientId !== "all") params.set("client_id", applied.clientId)
       if (applied.userId !== "all") params.set("user_id", applied.userId)
       if (applied.serial) params.set("serial", applied.serial)
+      if (applied.lpId) params.set("lp", applied.lpId)
       if (applied.item) params.set("item", applied.item)
       if (applied.fromBin) params.set("from_bin", applied.fromBin)
       if (applied.toBin) params.set("to_bin", applied.toBin)
@@ -265,6 +269,10 @@ export default function MovementHistory() {
     () => rows.flatMap((row) => [row.serial_number, row.item_code, row.item_name, row.from_bin_location, row.to_bin_location]),
     [rows]
   )
+  const lpSuggestions = useMemo(
+    () => Array.from(new Set(rows.map((row) => row.lp_code || "").filter(Boolean))),
+    [rows]
+  )
 
   const activeChips = useMemo(() => {
     const chips: Array<{ key: keyof Filters; label: string }> = []
@@ -277,6 +285,7 @@ export default function MovementHistory() {
     if (applied.clientSearch) chips.push({ key: "clientSearch", label: `Client: ${applied.clientSearch}` })
     if (applied.userSearch) chips.push({ key: "userSearch", label: `User: ${applied.userSearch}` })
     if (applied.serial) chips.push({ key: "serial", label: `Serial: ${applied.serial}` })
+    if (applied.lpId) chips.push({ key: "lpId", label: `LP: ${applied.lpId}` })
     if (applied.item) chips.push({ key: "item", label: `Item: ${applied.item}` })
     if (applied.fromBin) chips.push({ key: "fromBin", label: `From: ${applied.fromBin}` })
     if (applied.toBin) chips.push({ key: "toBin", label: `To: ${applied.toBin}` })
@@ -330,6 +339,7 @@ export default function MovementHistory() {
       clientId: resolveClientId(filters.clientSearch),
       userId: resolveUserId(filters.userSearch),
       serial: filters.serial.trim(),
+      lpId: filters.lpId.trim(),
       item: filters.item.trim(),
       fromBin: filters.fromBin.trim(),
       toBin: filters.toBin.trim(),
@@ -383,7 +393,7 @@ export default function MovementHistory() {
           <div>
             <CardTitle className="text-base">Audit Filters</CardTitle>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Search by warehouse, client, serial, item, bins, user, and movement date.
+              Search by warehouse, client, serial, LP, item, bins, user, and movement date.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => setFiltersOpen((value) => !value)}>
@@ -439,6 +449,15 @@ export default function MovementHistory() {
                 onValueChange={(value) => setFilters({ ...filters, serial: value })}
                 suggestions={serialSuggestions}
                 placeholder="Serial number"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>LP ID</Label>
+              <TypeaheadInput
+                value={filters.lpId}
+                onValueChange={(value) => setFilters({ ...filters, lpId: value })}
+                suggestions={lpSuggestions}
+                placeholder="LP ID"
               />
             </div>
             <div className="space-y-2">
@@ -583,6 +602,7 @@ export default function MovementHistory() {
               <Detail label="Exact Timestamp" value={formatTimestamp(selectedMovement.moved_at)} />
               <Detail label="Source" value={selectedMovement.movement_source} />
               <Detail label="Serial" value={selectedMovement.serial_number} mono />
+              <Detail label="LP ID" value={selectedMovement.lp_code || "-"} mono />
               <Detail label="Movement ID" value={selectedMovement.movement_ref} mono />
               <Detail label="Item" value={`${selectedMovement.item_name} (${selectedMovement.item_code})`} />
               <Detail label="Client" value={selectedMovement.client_name || "-"} />
@@ -643,6 +663,7 @@ function MovementTable({
           <TableHead>Moved At</TableHead>
           <TableHead>Movement</TableHead>
           <TableHead>Serial</TableHead>
+          <TableHead>LP ID</TableHead>
           <TableHead>Item</TableHead>
           <TableHead>Client</TableHead>
           <TableHead>Warehouse</TableHead>
@@ -655,7 +676,7 @@ function MovementTable({
       <TableBody>
         {isLoading && (
           <TableRow>
-            <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-500">Loading movement records...</TableCell>
+            <TableCell colSpan={11} className="py-12 text-center text-sm text-slate-500">Loading movement records...</TableCell>
           </TableRow>
         )}
         {!isLoading && rows.map((row) => (
@@ -670,6 +691,7 @@ function MovementTable({
                 {row.serial_number}
               </button>
             </TableCell>
+            <TableCell className="whitespace-nowrap font-mono text-xs">{row.lp_code || "-"}</TableCell>
             <TableCell className="min-w-56">
               <div className="font-medium">{row.item_name}</div>
               <div className="text-xs text-slate-500">{row.item_code}</div>
@@ -699,7 +721,7 @@ function MovementTable({
         ))}
         {!isLoading && rows.length === 0 && (
           <TableRow>
-            <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-500">
+            <TableCell colSpan={11} className="py-12 text-center text-sm text-slate-500">
               No movements found for these filters. Try expanding the date range or clearing filters.
             </TableCell>
           </TableRow>

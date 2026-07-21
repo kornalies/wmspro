@@ -17,8 +17,8 @@ export async function GET() {
       `SELECT id, client_code, client_name
        FROM clients
        WHERE id = ANY($1::int[])
-         AND client_name NOT ILIKE '%smoke%'
-         AND client_code NOT ILIKE '%smoke%'
+         AND COALESCE(client_name, '') NOT ILIKE '%smoke%'
+         AND COALESCE(client_code, '') NOT ILIKE '%smoke%'
        ORDER BY client_name ASC`,
       [clientIds]
     )

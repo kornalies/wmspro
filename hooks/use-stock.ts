@@ -6,6 +6,7 @@ import { apiClient } from "@/lib/api-client"
 
 type StockFilters = {
   serial?: string
+  lpId?: string
   item?: string
   clientId?: string
   status?: string
@@ -29,6 +30,7 @@ type StockSearchResponse<T> = {
 function buildQuery(filters: StockFilters, page: number, limit: number) {
   const sp = new URLSearchParams()
   if (filters.serial) sp.set("serial", filters.serial)
+  if (filters.lpId) sp.set("lp", filters.lpId)
   if (filters.item) sp.set("item", filters.item)
   if (filters.clientId && filters.clientId !== "all") {
     sp.set("client_id", filters.clientId)

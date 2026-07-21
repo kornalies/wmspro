@@ -6,22 +6,25 @@ import {
   Archive,
   Boxes,
   Building2,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Download,
   Edit,
   FileSpreadsheet,
   Grid3X3,
   Layers3,
-  Package,
   Plus,
+  Rows3,
   Search,
   Upload,
   X,
 } from "lucide-react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
+import { handleError } from "@/lib/error-handler"
 import {
   BIN_STATUSES,
   binStatusLabel,
@@ -53,14 +56,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
 
 type ZoneLayoutRow = {
@@ -87,7 +82,6 @@ type WarehouseOption = {
 }
 
 type FilterKey = "all" | "active" | "inactive" | "missing_capacity" | "with_stock"
-type ViewMode = "table" | "hierarchy"
 
 const emptyForm = {
   warehouse_id: "",
@@ -103,6 +97,23 @@ const emptyForm = {
   sort_order: "0",
 }
 
+const emptyBulkForm = {
+  warehouse_id: "",
+  zone_code: "",
+  zone_name: "",
+  zone_type: DEFAULT_ZONE_TYPE as string,
+  rack_code: "",
+  rack_name: "",
+  bin_prefix: "",
+  bin_start: "1",
+  bin_end: "20",
+  bin_pad: "2",
+  bin_name_prefix: "Bin ",
+  bin_status: DEFAULT_BIN_STATUS as string,
+  capacity_units: "",
+  sort_order: "0",
+}
+
 const field = (value: unknown, fallback = "-") => {
   if (value === null || value === undefined) return fallback
   const text = String(value).trim()
@@ -112,8 +123,21 @@ const field = (value: unknown, fallback = "-") => {
 const normalize = (value: string) => value.trim().toUpperCase()
 
 export default function ZoneLayoutsPage() {
+  const queryClient = useQueryClient()
   const saveMutation = useSaveAdminResource("zone-layouts")
   const deleteMutation = useDeleteAdminResource("zone-layouts")
+
+  const bulkMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) => {
+      const res = await apiClient.post<{ created: number; skipped: number }>("/zone-layouts", payload)
+      return res
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "zone-layouts"] })
+      toast.success(res.message ?? "Bins created")
+    },
+    onError: (error) => handleError(error, "Failed to create bins"),
+  })
 
   const warehousesQuery = useQuery({
     queryKey: ["warehouses", "active"],
@@ -127,11 +151,14 @@ export default function ZoneLayoutsPage() {
   const [warehouseFilter, setWarehouseFilter] = useState("all")
   const [zoneFilter, setZoneFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState<FilterKey>("all")
-  const [viewMode, setViewMode] = useState<ViewMode>("table")
+  const [expandedZones, setExpandedZones] = useState<Set<string>>(new Set())
+  const [expandedRacks, setExpandedRacks] = useState<Set<string>>(new Set())
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editRow, setEditRow] = useState<ZoneLayoutRow | null>(null)
   const [detailRow, setDetailRow] = useState<ZoneLayoutRow | null>(null)
   const [form, setForm] = useState(emptyForm)
+  const [isBulkOpen, setIsBulkOpen] = useState(false)
+  const [bulkForm, setBulkForm] = useState(emptyBulkForm)
 
   const layoutsQuery = useQuery({
     queryKey: ["admin", "zone-layouts", warehouseFilter],
@@ -220,7 +247,7 @@ export default function ZoneLayoutsPage() {
       string,
       {
         name: string
-        zones: Map<string, { name: string; racks: Map<string, { name: string; bins: ZoneLayoutRow[] }> }>
+        zones: Map<string, { name: string; type: string; racks: Map<string, { name: string; bins: ZoneLayoutRow[] }> }>
       }
     >()
 
@@ -232,7 +259,7 @@ export default function ZoneLayoutsPage() {
       }
       const warehouse = warehouseGroups.get(warehouseKey)!
       if (!warehouse.zones.has(row.zone_code)) {
-        warehouse.zones.set(row.zone_code, { name: row.zone_name, racks: new Map() })
+        warehouse.zones.set(row.zone_code, { name: row.zone_name, type: row.zone_type || DEFAULT_ZONE_TYPE, racks: new Map() })
       }
       const zone = warehouse.zones.get(row.zone_code)!
       if (!zone.racks.has(row.rack_code)) {
@@ -243,6 +270,36 @@ export default function ZoneLayoutsPage() {
 
     return Array.from(warehouseGroups.entries())
   }, [filtered, warehouseMap])
+
+  // A search term overrides the collapsed state so matches are always visible.
+  const searchActive = search.trim().length > 0
+
+  const toggleKey = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, key: string) =>
+    setter((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
+  const expandAll = () => {
+    const zoneKeys = new Set<string>()
+    const rackKeys = new Set<string>()
+    for (const [warehouseKey, warehouse] of hierarchy) {
+      for (const [zoneCode, zone] of warehouse.zones) {
+        const zoneKey = `${warehouseKey}::${zoneCode}`
+        zoneKeys.add(zoneKey)
+        for (const [rackCode] of zone.racks) rackKeys.add(`${zoneKey}::${rackCode}`)
+      }
+    }
+    setExpandedZones(zoneKeys)
+    setExpandedRacks(rackKeys)
+  }
+
+  const collapseAll = () => {
+    setExpandedZones(new Set())
+    setExpandedRacks(new Set())
+  }
 
   const filterChips: Array<{ key: FilterKey; label: string; count: number }> = [
     { key: "all", label: "All", count: rows.length },
@@ -292,6 +349,87 @@ export default function ZoneLayoutsPage() {
       sort_order: String((row.sort_order ?? 0) + 1),
     })
     setIsDialogOpen(true)
+  }
+
+  const openBulk = () => {
+    setBulkForm(emptyBulkForm)
+    setIsBulkOpen(true)
+  }
+
+  // Existing (zone_code -> {name, type}) so picking a zone in the bulk dialog
+  // reuses the same name/type instead of forcing a re-type.
+  const zoneDetails = useMemo(() => {
+    const map = new Map<string, { name: string; type: string }>()
+    for (const row of rows) {
+      if (!map.has(row.zone_code)) map.set(row.zone_code, { name: row.zone_name, type: row.zone_type || DEFAULT_ZONE_TYPE })
+    }
+    return map
+  }, [rows])
+
+  const applyExistingZone = (zoneCode: string) => {
+    const detail = zoneDetails.get(zoneCode)
+    setBulkForm((prev) => ({
+      ...prev,
+      zone_code: zoneCode,
+      zone_name: detail?.name ?? prev.zone_name,
+      zone_type: detail?.type ?? prev.zone_type,
+    }))
+  }
+
+  const generatedBins = useMemo(() => {
+    const start = Number.parseInt(bulkForm.bin_start, 10)
+    const end = Number.parseInt(bulkForm.bin_end, 10)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return []
+    const pad = Math.max(0, Number(bulkForm.bin_pad) || 0)
+    const prefix = bulkForm.bin_prefix.trim().toUpperCase()
+    const namePrefix = bulkForm.bin_name_prefix
+    const out: Array<{ bin_code: string; bin_name: string }> = []
+    for (let n = start; n <= end && out.length < 500; n++) {
+      const num = String(n).padStart(pad, "0")
+      const code = `${prefix}${num}`
+      out.push({ bin_code: code, bin_name: `${namePrefix}${num}`.trim() || code })
+    }
+    return out
+  }, [bulkForm])
+
+  const bulkDuplicates = useMemo(() => {
+    if (!generatedBins.length) return 0
+    const existing = new Set(
+      rows
+        .filter(
+          (row) =>
+            String(row.warehouse_id) === bulkForm.warehouse_id &&
+            normalize(row.zone_code) === normalize(bulkForm.zone_code) &&
+            normalize(row.rack_code) === normalize(bulkForm.rack_code)
+        )
+        .map((row) => normalize(row.bin_code))
+    )
+    return generatedBins.filter((bin) => existing.has(normalize(bin.bin_code))).length
+  }, [generatedBins, rows, bulkForm.warehouse_id, bulkForm.zone_code, bulkForm.rack_code])
+
+  const handleBulkSave = async () => {
+    if (!bulkForm.warehouse_id || !bulkForm.zone_code || !bulkForm.zone_name || !bulkForm.rack_code || !bulkForm.rack_name) {
+      toast.error("Complete warehouse, zone, and rack fields")
+      return
+    }
+    if (!generatedBins.length) {
+      toast.error("Enter a valid bin range (start must be ≤ end)")
+      return
+    }
+
+    await bulkMutation.mutateAsync({
+      warehouse_id: Number(bulkForm.warehouse_id),
+      zone_code: normalize(bulkForm.zone_code),
+      zone_name: bulkForm.zone_name.trim(),
+      zone_type: bulkForm.zone_type,
+      rack_code: normalize(bulkForm.rack_code),
+      rack_name: bulkForm.rack_name.trim(),
+      bin_status: bulkForm.bin_status,
+      capacity_units: bulkForm.capacity_units ? Number(bulkForm.capacity_units) : undefined,
+      sort_order: Number(bulkForm.sort_order || 0),
+      bins: generatedBins,
+    })
+    setIsBulkOpen(false)
   }
 
   const resetFilters = () => {
@@ -393,6 +531,9 @@ export default function ZoneLayoutsPage() {
           </Button>
           <Button variant="outline" onClick={() => exportZoneLayoutsToExcel(filtered)}>
             <Download className="mr-2 h-4 w-4" /> Export
+          </Button>
+          <Button variant="outline" onClick={openBulk}>
+            <Rows3 className="mr-2 h-4 w-4" /> Add Rack
           </Button>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -607,210 +748,297 @@ export default function ZoneLayoutsPage() {
         </CardContent>
       </Card>
 
-      <div className="flex flex-wrap gap-2">
-        <Button variant={viewMode === "table" ? "default" : "outline"} className={viewMode === "table" ? "bg-slate-950" : ""} onClick={() => setViewMode("table")}>
-          List
-        </Button>
-        <Button variant={viewMode === "hierarchy" ? "default" : "outline"} className={viewMode === "hierarchy" ? "bg-slate-950" : ""} onClick={() => setViewMode("hierarchy")}>
-          Hierarchy
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">Zone Hierarchy</h2>
+          <p className="text-sm text-slate-500">{metrics.zoneCount} zones · {metrics.rackCount} racks · {metrics.binCount} bins</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={expandAll}>Expand all</Button>
+          <Button variant="outline" size="sm" onClick={collapseAll}>Collapse all</Button>
+        </div>
       </div>
 
-      {viewMode === "table" ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Bin Layout Directory</h2>
-                <p className="text-sm text-slate-500">Showing {filtered.length ? `1-${filtered.length}` : "0"} of {rows.length} bin layouts</p>
+      <div className="space-y-4">
+        {hierarchy.map(([warehouseKey, warehouse]) => (
+          <Card key={warehouseKey}>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Building2 className="h-5 w-5 text-blue-600" />
+                <h2 className="text-lg font-semibold">{warehouse.name}</h2>
+                <Badge variant="outline">{warehouse.zones.size} zones</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {Array.from(warehouse.zones.entries()).map(([zoneCode, zone]) => {
+                const zoneKey = `${warehouseKey}::${zoneCode}`
+                const zoneOpen = searchActive || expandedZones.has(zoneKey)
+                const zoneBinCount = Array.from(zone.racks.values()).reduce((sum, rack) => sum + rack.bins.length, 0)
+                return (
+                  <div key={zoneKey} className="rounded-lg border">
+                    <button
+                      type="button"
+                      onClick={() => toggleKey(setExpandedZones, zoneKey)}
+                      className="flex w-full items-center gap-2 rounded-t-lg bg-slate-50 px-3 py-2.5 text-left hover:bg-slate-100"
+                    >
+                      {zoneOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
+                      <Layers3 className="h-4 w-4 shrink-0 text-violet-600" />
+                      <span className="font-mono text-sm font-semibold">{zoneCode}</span>
+                      <span className="text-sm text-slate-600">{zone.name}</span>
+                      <Badge variant="outline" className="rounded px-1.5 py-0 text-[10px] font-normal">{zoneTypeLabel(zone.type)}</Badge>
+                      <span className="ml-auto whitespace-nowrap text-xs text-slate-500">{zone.racks.size} racks · {zoneBinCount} bins</span>
+                    </button>
+
+                    {zoneOpen && (
+                      <div className="space-y-2 p-3">
+                        {Array.from(zone.racks.entries()).map(([rackCode, rack]) => {
+                          const rackKey = `${zoneKey}::${rackCode}`
+                          const rackOpen = searchActive || expandedRacks.has(rackKey)
+                          return (
+                            <div key={rackKey} className="rounded-md border">
+                              <button
+                                type="button"
+                                onClick={() => toggleKey(setExpandedRacks, rackKey)}
+                                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                              >
+                                {rackOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />}
+                                <Grid3X3 className="h-4 w-4 shrink-0 text-cyan-600" />
+                                <span className="font-mono text-sm font-semibold">{rackCode}</span>
+                                <span className="text-xs text-slate-500">{rack.name}</span>
+                                <Badge variant="outline" className="ml-auto">{rack.bins.length} bins</Badge>
+                              </button>
+
+                              {rackOpen && (
+                                <div className="divide-y border-t">
+                                  {rack.bins.map((bin) => {
+                                    const usage = utilization(bin)
+                                    return (
+                                      <div key={bin.id} className="flex flex-wrap items-center gap-3 py-2 pl-9 pr-3">
+                                        <Boxes className="h-4 w-4 shrink-0 text-emerald-600" />
+                                        <div className="min-w-[120px]">
+                                          <div className="font-mono text-sm">{bin.bin_code}</div>
+                                          <div className="text-xs text-slate-500">{bin.bin_name}</div>
+                                        </div>
+                                        <div className="min-w-[90px]">{capacityBadge(bin)}</div>
+                                        <div className="min-w-[110px]">
+                                          <div className="flex justify-between text-xs text-slate-500">
+                                            <span>{usage.stock.toLocaleString()} stock</span>
+                                            <span>{bin.capacity_units ? `${usage.pct}%` : "N/A"}</span>
+                                          </div>
+                                          <div className="mt-1 h-1.5 rounded-full bg-slate-100">
+                                            <div className="h-1.5 rounded-full bg-blue-600" style={{ width: `${usage.pct}%` }} />
+                                          </div>
+                                        </div>
+                                        <Badge
+                                          variant="outline"
+                                          className={bin.bin_status && bin.bin_status !== "AVAILABLE" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 text-slate-600"}
+                                        >
+                                          {binStatusLabel(bin.bin_status)}
+                                        </Badge>
+                                        {!bin.is_active && <Badge className="bg-red-100 text-red-800">Inactive</Badge>}
+                                        <div className="ml-auto flex gap-1">
+                                          <Button variant="ghost" size="sm" onClick={() => setDetailRow(bin)}>View</Button>
+                                          <Button variant="ghost" size="sm" onClick={() => openEdit(bin)} title="Edit layout" aria-label={`Edit layout ${bin.bin_code}`}>
+                                            <Edit className="h-4 w-4" />
+                                          </Button>
+                                          <Button variant="ghost" size="sm" onClick={() => openDuplicate(bin)} title="Duplicate layout" aria-label={`Duplicate layout ${bin.bin_code}`}>
+                                            <Copy className="h-4 w-4" />
+                                          </Button>
+                                          <Button variant="ghost" size="sm" onClick={() => handleDeactivate(bin)} title="Deactivate layout" aria-label={`Deactivate layout ${bin.bin_code}`}>
+                                            <Archive className="h-4 w-4 text-red-600" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </CardContent>
+          </Card>
+        ))}
+        {!hierarchy.length && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <Layers3 className="h-10 w-10 text-slate-300" />
+              <h3 className="mt-3 font-semibold">No zones to display</h3>
+              <p className="mt-1 text-sm text-slate-500">Clear filters or add the first zone, rack, and bin for this warehouse setup.</p>
+              <Button className="mt-4 bg-blue-600" onClick={openCreate}>
+                <Plus className="mr-2 h-4 w-4" /> Add Bin Layout
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <Dialog open={isBulkOpen} onOpenChange={setIsBulkOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Add Rack with Bin Range</DialogTitle>
+            <DialogDescription>Generate many bins under a single rack in one step. Bins that already exist are skipped.</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 pt-2">
+            <div className="space-y-2">
+              <Label>Warehouse *</Label>
+              <Select value={bulkForm.warehouse_id} onValueChange={(value) => setBulkForm({ ...bulkForm, warehouse_id: value })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select warehouse" />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouses.map((warehouse) => (
+                    <SelectItem key={warehouse.id} value={String(warehouse.id)}>
+                      {warehouse.warehouse_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {zones.length > 0 && (
+              <div className="space-y-2">
+                <Label>Use Existing Zone</Label>
+                <Select value="" onValueChange={applyExistingZone}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pick a zone to reuse its name & type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {zones.map(([code, label]) => (
+                      <SelectItem key={code} value={code}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500">Optional — or type a new zone below to create it.</p>
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label>Zone Code *</Label>
+                <Input value={bulkForm.zone_code} onChange={(e) => setBulkForm({ ...bulkForm, zone_code: e.target.value.toUpperCase() })} className="uppercase" />
+              </div>
+              <div className="space-y-2">
+                <Label>Zone Name *</Label>
+                <Input value={bulkForm.zone_name} onChange={(e) => setBulkForm({ ...bulkForm, zone_name: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Zone Type *</Label>
+                <Select value={bulkForm.zone_type} onValueChange={(value) => setBulkForm({ ...bulkForm, zone_type: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ZONE_TYPES.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {zoneTypeLabel(type)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-gray-50">
-                    <TableHead>Warehouse</TableHead>
-                    <TableHead>Zone</TableHead>
-                    <TableHead>Rack</TableHead>
-                    <TableHead>Bin</TableHead>
-                    <TableHead>Capacity</TableHead>
-                    <TableHead>Utilization</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((row) => {
-                    const usage = utilization(row)
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium">{row.warehouse_name ?? warehouseMap.get(row.warehouse_id)}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Layers3 className="h-4 w-4 text-slate-400" />
-                            <div>
-                              <div className="font-mono text-sm">{row.zone_code}</div>
-                              <div className="text-xs text-slate-500">{row.zone_name}</div>
-                              <Badge variant="outline" className="mt-1 rounded px-1.5 py-0 text-[10px] font-normal">
-                                {zoneTypeLabel(row.zone_type)}
-                              </Badge>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-mono text-sm">{row.rack_code}</div>
-                          <div className="text-xs text-slate-500">{row.rack_name}</div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-mono text-sm">{row.bin_code}</div>
-                          <div className="text-xs text-slate-500">{row.bin_name}</div>
-                        </TableCell>
-                        <TableCell>{capacityBadge(row)}</TableCell>
-                        <TableCell>
-                          <div className="min-w-[130px]">
-                            <div className="flex justify-between text-xs text-slate-500">
-                              <span>{usage.stock.toLocaleString()} stock</span>
-                              <span>{row.capacity_units ? `${usage.pct}%` : "N/A"}</span>
-                            </div>
-                            <div className="mt-1 h-2 rounded-full bg-slate-100">
-                              <div className="h-2 rounded-full bg-blue-600" style={{ width: `${usage.pct}%` }} />
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col items-start gap-1">
-                            <Badge className={row.is_active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}>
-                              {row.is_active ? "Active" : "Inactive"}
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className={
-                                row.bin_status && row.bin_status !== "AVAILABLE"
-                                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                                  : "border-slate-200 text-slate-600"
-                              }
-                            >
-                              {binStatusLabel(row.bin_status)}
-                            </Badge>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => setDetailRow(row)}>View</Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openEdit(row)}
-                              title="Edit layout"
-                              aria-label={`Edit layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openDuplicate(row)}
-                              title="Duplicate layout"
-                              aria-label={`Duplicate layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeactivate(row)}
-                              title="Deactivate layout"
-                              aria-label={`Deactivate layout ${row.zone_code} ${row.rack_code} ${row.bin_code}`}
-                            >
-                              <Archive className="h-4 w-4 text-red-600" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                  {!filtered.length && (
-                    <TableRow>
-                      <TableCell colSpan={8}>
-                        <div className="flex flex-col items-center justify-center py-12 text-center">
-                          <Package className="h-10 w-10 text-slate-300" />
-                          <h3 className="mt-3 font-semibold">No bin layouts configured</h3>
-                          <p className="mt-1 text-sm text-slate-500">Add the first zone, rack, and bin for this warehouse setup.</p>
-                          <Button className="mt-4 bg-blue-600" onClick={openCreate}>
-                            <Plus className="mr-2 h-4 w-4" /> Add Bin Layout
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Rack Code *</Label>
+                <Input value={bulkForm.rack_code} onChange={(e) => setBulkForm({ ...bulkForm, rack_code: e.target.value.toUpperCase() })} className="uppercase" />
+              </div>
+              <div className="space-y-2">
+                <Label>Rack Name *</Label>
+                <Input value={bulkForm.rack_name} onChange={(e) => setBulkForm({ ...bulkForm, rack_name: e.target.value })} />
+              </div>
             </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4">
-          {hierarchy.map(([warehouseKey, warehouse]) => (
-            <Card key={warehouseKey}>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Building2 className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-lg font-semibold">{warehouse.name}</h2>
-                  <Badge variant="outline">{Array.from(warehouse.zones.values()).length} zones</Badge>
+
+            <div className="rounded-lg border bg-slate-50 p-4">
+              <h3 className="text-sm font-semibold">Bin Range</h3>
+              <div className="mt-3 grid gap-4 md:grid-cols-4">
+                <div className="space-y-2">
+                  <Label>Bin Prefix</Label>
+                  <Input value={bulkForm.bin_prefix} onChange={(e) => setBulkForm({ ...bulkForm, bin_prefix: e.target.value.toUpperCase() })} className="uppercase" placeholder="A-" />
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {Array.from(warehouse.zones.entries()).map(([zoneCode, zone]) => (
-                  <div key={zoneCode} className="rounded-lg border p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="bg-violet-100 text-violet-800">{zoneCode}</Badge>
-                      <span className="font-semibold">{zone.name}</span>
-                      <span className="text-sm text-slate-500">{zone.racks.size} racks</span>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {Array.from(zone.racks.entries()).map(([rackCode, rack]) => (
-                        <div key={rackCode} className="rounded-md bg-slate-50 p-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="font-mono text-sm font-semibold">{rackCode}</p>
-                              <p className="text-xs text-slate-500">{rack.name}</p>
-                            </div>
-                            <Badge variant="outline">{rack.bins.length} bins</Badge>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {rack.bins.map((bin) => (
-                              <button
-                                key={bin.id}
-                                type="button"
-                                onClick={() => setDetailRow(bin)}
-                                className="rounded-md border bg-white px-2.5 py-1.5 text-left text-xs hover:border-blue-300 hover:bg-blue-50"
-                              >
-                                <span className="block font-mono font-semibold">{bin.bin_code}</span>
-                                <span className="text-slate-500">{bin.capacity_units ? `${bin.capacity_units} units` : "Missing capacity"}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                <div className="space-y-2">
+                  <Label>Start *</Label>
+                  <Input type="number" min={0} value={bulkForm.bin_start} onChange={(e) => setBulkForm({ ...bulkForm, bin_start: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>End *</Label>
+                  <Input type="number" min={0} value={bulkForm.bin_end} onChange={(e) => setBulkForm({ ...bulkForm, bin_end: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Digits</Label>
+                  <Input type="number" min={0} max={6} value={bulkForm.bin_pad} onChange={(e) => setBulkForm({ ...bulkForm, bin_pad: e.target.value })} />
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Bin Name Prefix</Label>
+                  <Input value={bulkForm.bin_name_prefix} onChange={(e) => setBulkForm({ ...bulkForm, bin_name_prefix: e.target.value })} placeholder="Bin " />
+                </div>
+                <div className="space-y-2">
+                  <Label>Bin Status</Label>
+                  <Select value={bulkForm.bin_status} onValueChange={(value) => setBulkForm({ ...bulkForm, bin_status: value })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BIN_STATUSES.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {binStatusLabel(status)}
+                        </SelectItem>
                       ))}
-                    </div>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Capacity per Bin</Label>
+                  <Input type="number" min={0} value={bulkForm.capacity_units} onChange={(e) => setBulkForm({ ...bulkForm, capacity_units: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Sort Order Start</Label>
+                  <Input type="number" min={0} value={bulkForm.sort_order} onChange={(e) => setBulkForm({ ...bulkForm, sort_order: e.target.value })} />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-4 text-sm">
+              {generatedBins.length ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="bg-emerald-100 text-emerald-800">{generatedBins.length} bins</Badge>
+                    {bulkDuplicates > 0 && (
+                      <Badge className="bg-amber-100 text-amber-800">{bulkDuplicates} already exist — will be skipped</Badge>
+                    )}
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          ))}
-          {!hierarchy.length && (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                <Layers3 className="h-10 w-10 text-slate-300" />
-                <h3 className="mt-3 font-semibold">No hierarchy to display</h3>
-                <p className="mt-1 text-sm text-slate-500">Clear filters or add a bin layout to build the hierarchy.</p>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
+                  <p className="mt-2 font-mono text-xs text-slate-600">
+                    {generatedBins.slice(0, 6).map((bin) => bin.bin_code).join(", ")}
+                    {generatedBins.length > 6 ? ` … ${generatedBins[generatedBins.length - 1].bin_code}` : ""}
+                  </p>
+                </>
+              ) : (
+                <p className="text-slate-500">Enter a valid start and end to preview the generated bins.</p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBulkOpen(false)}>Cancel</Button>
+            <Button onClick={handleBulkSave} className="bg-blue-600" disabled={bulkMutation.isPending || !generatedBins.length}>
+              Create {generatedBins.length || ""} Bins
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(detailRow)} onOpenChange={(open) => !open && setDetailRow(null)}>
         <DialogContent className="sm:max-w-2xl">
