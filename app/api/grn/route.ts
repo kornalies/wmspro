@@ -4,6 +4,7 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { query, getClient, setTenantContext } from "@/lib/db"
 import { grnHeaderSchema, grnLineItemSchema } from "@/lib/validations"
 import { createGrnWithLineItems } from "@/lib/grn-service"
+import { confirmGrnInTransaction, GrnConfirmError } from "@/lib/grn-confirm"
 import { ensureGrnManualSchema, ensureStockPutawaySchema } from "@/lib/db-bootstrap"
 import { fail, ok, paginated } from "@/lib/api-response"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
@@ -600,19 +601,36 @@ export async function POST(request: NextRequest) {
     await client.query("BEGIN")
     await setTenantContext(client, session.companyId)
 
+    // Always create as DRAFT, then run the SHARED confirmation when a confirmed GRN was
+    // requested. This funnels every "confirm" (web one-shot, web draft->confirm, mobile
+    // approval) through confirmGrnInTransaction, so all three get identical INBOUND_HANDLING
+    // billing + LP traceability. Creating directly as CONFIRMED here used to skip both.
+    const wantsConfirm = headerData.status === "CONFIRMED"
     const created = await createGrnWithLineItems(client, {
-      header: headerData,
+      header: { ...headerData, status: "DRAFT" },
       lineItems,
       createdBy: session.userId,
     })
 
+    if (wantsConfirm) {
+      await confirmGrnInTransaction(client, {
+        companyId: session.companyId,
+        userId: session.userId,
+        grnId: Number(created.id),
+      })
+      created.status = "CONFIRMED"
+    }
+
     await client.query("COMMIT")
 
-    return ok(created, "GRN created successfully")
+    return ok(created, wantsConfirm ? "GRN created and confirmed successfully" : "GRN created successfully")
   } catch (error: unknown) {
     await client.query("ROLLBACK")
     const productGuarded = guardProductError(error)
     if (productGuarded) return productGuarded
+    if (error instanceof GrnConfirmError) {
+      return fail(error.code, error.message, error.status)
+    }
     console.error("GRN creation error:", error)
     const message = error instanceof Error ? error.message : "Failed to create GRN"
     return fail("VALIDATION_OR_CREATE_ERROR", message, 400)

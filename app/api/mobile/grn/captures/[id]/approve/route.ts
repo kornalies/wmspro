@@ -3,7 +3,12 @@
 import { getSession, requirePermission } from "@/lib/auth"
 import { getClient, setTenantContext } from "@/lib/db"
 import { createGrnWithLineItems } from "@/lib/grn-service"
-import { ensureMobileGrnCaptureSchema } from "@/lib/db-bootstrap"
+import { confirmGrnInTransaction, GrnConfirmError } from "@/lib/grn-confirm"
+import {
+  ensureGrnManualSchema,
+  ensureMobileGrnCaptureSchema,
+  ensureStockPutawaySchema,
+} from "@/lib/db-bootstrap"
 import { fail, ok } from "@/lib/api-response"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
@@ -35,6 +40,8 @@ export async function POST(_: NextRequest, context: RouteContext) {
     requirePolicyPermission(policy, "grn.mobile.approve")
 
     await ensureMobileGrnCaptureSchema(db)
+    await ensureGrnManualSchema(db)
+    await ensureStockPutawaySchema(db)
 
     const { id } = await context.params
     await db.query("BEGIN")
@@ -69,6 +76,10 @@ export async function POST(_: NextRequest, context: RouteContext) {
     const totalQuantity = lineItems.reduce((sum, item) => sum + item.quantity, 0)
     const totalValue = lineItems.reduce((sum, item) => sum + item.quantity * (item.rate || 0), 0)
 
+    // Create the GRN as DRAFT (no stock yet), then run the SHARED confirmation so mobile
+    // approvals get identical billing + LP traceability as the web confirm path. Previously
+    // this created the GRN directly as CONFIRMED via createGrnWithLineItems, which wrote
+    // stock serials with no lp_record_id and never staged the INBOUND_HANDLING charge.
     const createdGrn = await createGrnWithLineItems(db, {
       header: {
         ...payload.header,
@@ -76,9 +87,16 @@ export async function POST(_: NextRequest, context: RouteContext) {
         total_quantity: totalQuantity,
         total_value: totalValue,
         source_channel: payload.source_channel || "MOBILE_OCR",
+        status: "DRAFT",
       },
       lineItems,
       createdBy: session.userId,
+    })
+
+    const confirmed = await confirmGrnInTransaction(db, {
+      companyId: session.companyId,
+      userId: session.userId,
+      grnId: Number(createdGrn.id),
     })
 
     await db.query(
@@ -92,11 +110,17 @@ export async function POST(_: NextRequest, context: RouteContext) {
     )
 
     await db.query("COMMIT")
-    return ok({ capture_id: Number(id), grn_id: createdGrn.id }, "Mobile GRN approved")
+    return ok(
+      { capture_id: Number(id), grn_id: confirmed.id, status: confirmed.status },
+      "Mobile GRN approved"
+    )
   } catch (error: unknown) {
     await db.query("ROLLBACK")
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
+    if (error instanceof GrnConfirmError) {
+      return fail(error.code, error.message, error.status)
+    }
     const message = error instanceof Error ? error.message : "Failed to approve capture"
     return fail("APPROVAL_FAILED", message, 400)
   } finally {
