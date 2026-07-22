@@ -635,6 +635,25 @@ export async function generateInvoiceDrafts(
         continue
       }
       invoiceId = Number(existing.id)
+      // Release any transactions billed to this DRAFT invoice in a PRIOR run back to the
+      // unbilled pool before we wipe its lines. Regeneration deletes every line but only
+      // re-adds currently-UNBILLED txns; without this reset, txns billed by an earlier run
+      // stay BILLED with invoice_id set yet get no line, silently orphaning them (invoice
+      // total understated, charge never re-billable). Resetting them lets the UNBILLED
+      // re-select below rebuild ALL of the invoice's lines.
+      await db.query(
+        `UPDATE billing_transactions
+         SET status = 'UNBILLED',
+             invoice_id = NULL,
+             billed_at = NULL,
+             billed_by = NULL,
+             updated_by = $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE company_id = $1
+           AND invoice_id = $2
+           AND status = 'BILLED'`,
+        [args.companyId, invoiceId, args.userId ?? null]
+      )
       await db.query(`DELETE FROM invoice_tax_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, invoiceId])
       await db.query(`DELETE FROM invoice_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, invoiceId])
     } else {
