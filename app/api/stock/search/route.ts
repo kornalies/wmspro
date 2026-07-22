@@ -4,6 +4,11 @@ import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, paginated } from "@/lib/api-response"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
+import {
+  STOCK_SERIAL_JOINS,
+  STOCK_SERIAL_SELECT,
+  buildStockSearchFilters,
+} from "@/lib/stock-search"
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,79 +17,20 @@ export async function GET(request: NextRequest) {
     await assertProductEnabled(session.companyId, "WMS")
 
     const { searchParams } = new URL(request.url)
-    const serial = searchParams.get("serial")?.trim()
-    const lp = searchParams.get("lp")?.trim()
-    const item = searchParams.get("item")?.trim()
-    const clientId = Number(searchParams.get("client_id") || 0)
-    const status = searchParams.get("status")
-    const warehouseId = Number(searchParams.get("warehouse_id") || 0)
-    const minAge = searchParams.get("min_age")
-    const maxAge = searchParams.get("max_age")
     const page = Math.max(1, Number(searchParams.get("page") || 1))
     const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") || 50)))
+    // group=item returns lightweight item-summary rows (one per item, paginated by
+    // item) instead of serial rows. This keeps the default consolidated view flat and
+    // cheap no matter how deep the stock is; the UI drills into an item's serials
+    // on demand via item_id. Serial mode (default) stays for existing API consumers.
+    const groupByItem = searchParams.get("group") === "item"
 
-    const where: string[] = [`ssn.company_id = $1`]
-    const params: Array<string | number> = [session.companyId]
-    let idx = 2
+    const { whereClause, params } = buildStockSearchFilters(searchParams, session.companyId)
 
-    if (serial) {
-      where.push(`ssn.serial_number ILIKE $${idx++}`)
-      params.push(`%${serial}%`)
-    }
-    if (lp) {
-      // Match the LP via the stamped FK first; fall back to the legacy naming convention
-      // (serial = lp_code OR serial LIKE "<lp_code>-%") for stock received before migration 059.
-      where.push(
-        `EXISTS (
-          SELECT 1
-          FROM public.mobile_lp_records lpf
-          WHERE (
-              ssn.lp_record_id = lpf.id
-              OR ssn.serial_number = lpf.lp_code
-              OR ssn.serial_number LIKE lpf.lp_code || '-%'
-            )
-            AND lpf.lp_code ILIKE $${idx++}
-        )`
-      )
-      params.push(`%${lp}%`)
-    }
-    if (item) {
-      where.push(
-        `EXISTS (
-          SELECT 1
-          FROM items i2
-          WHERE i2.id = ssn.item_id
-            AND (i2.item_name ILIKE $${idx} OR i2.item_code ILIKE $${idx})
-        )`
-      )
-      params.push(`%${item}%`)
-      idx += 1
-    }
-    if (status && status !== "all") {
-      where.push(`ssn.status = $${idx++}`)
-      params.push(status)
-    }
-    if (clientId) {
-      where.push(`ssn.client_id = $${idx++}`)
-      params.push(clientId)
-    }
-    if (warehouseId) {
-      where.push(`ssn.warehouse_id = $${idx++}`)
-      params.push(warehouseId)
-    }
-    if (minAge) {
-      where.push(`(CURRENT_DATE - ssn.received_date::date) >= $${idx++}`)
-      params.push(Number(minAge))
-    }
-    if (maxAge) {
-      where.push(`(CURRENT_DATE - ssn.received_date::date) <= $${idx++}`)
-      params.push(Number(maxAge))
-    }
-
-    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : ""
     const summaryResult = await query(
       `SELECT
         COUNT(*)::int AS total,
+        COUNT(DISTINCT ssn.item_id)::int AS items_total,
         COUNT(*) FILTER (WHERE ssn.status = 'IN_STOCK')::int AS in_stock,
         COUNT(*) FILTER (WHERE ssn.status = 'RESERVED')::int AS reserved,
         COUNT(*) FILTER (WHERE ssn.status = 'DISPATCHED')::int AS dispatched,
@@ -94,7 +40,10 @@ export async function GET(request: NextRequest) {
       params
     )
 
-    const total = Number(summaryResult.rows[0]?.total || 0)
+    const serialTotal = Number(summaryResult.rows[0]?.total || 0)
+    const itemsTotal = Number(summaryResult.rows[0]?.items_total || 0)
+    // In grouped mode the "unit" of pagination is the item, not the serial.
+    const total = groupByItem ? itemsTotal : serialTotal
     const totalPages = total > 0 ? Math.ceil(total / limit) : 1
     const safePage = Math.min(page, totalPages)
     const offset = (safePage - 1) * limit
@@ -102,58 +51,58 @@ export async function GET(request: NextRequest) {
     const dataParams = [...params, limit, offset]
     const limitParamIndex = params.length + 1
     const offsetParamIndex = params.length + 2
-    const result = await query(
-      `SELECT
-        ssn.id,
-        ssn.serial_number,
-        ssn.status,
-        ssn.received_date,
-        ssn.warehouse_id,
-        (CURRENT_DATE - ssn.received_date::date) AS age_days,
-        i.item_name,
-        i.item_code,
-        c.client_name,
-        w.warehouse_name,
-        COALESCE(zl.zone_name, 'Unassigned') AS zone_name,
-        zl.rack_name,
-        zl.bin_name,
-        COALESCE(
-          NULLIF(ssn.bin_location, ''),
-          NULLIF(CONCAT_WS('/', NULLIF(zl.zone_code, ''), NULLIF(zl.rack_code, ''), NULLIF(zl.bin_code, '')), ''),
-          'Unassigned'
-        ) AS bin_location,
-        COALESCE(lpdir.lp_code, lp.lp_code) AS lp_code
-      FROM stock_serial_numbers ssn
-      JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
-      JOIN clients c ON c.id = ssn.client_id AND c.company_id = ssn.company_id
-      JOIN warehouses w ON w.id = ssn.warehouse_id AND w.company_id = ssn.company_id
-      LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id AND zl.company_id = ssn.company_id
-      -- Preferred: the LP stamped on the row at GRN confirm (works for real Mfg serials too).
-      LEFT JOIN public.mobile_lp_records lpdir ON lpdir.id = ssn.lp_record_id
-      -- Fallback for pre-migration-059 stock that only carries the "<lp_code>-<n>" convention.
-      LEFT JOIN LATERAL (
-        SELECT lpr.lp_code
-        FROM public.mobile_lp_records lpr
-        WHERE ssn.serial_number = lpr.lp_code
-           OR ssn.serial_number LIKE lpr.lp_code || '-%'
-        ORDER BY LENGTH(lpr.lp_code) DESC
-        LIMIT 1
-      ) lp ON TRUE
-      ${whereClause}
-      ORDER BY ssn.received_date DESC
-      LIMIT $${limitParamIndex}
-      OFFSET $${offsetParamIndex}`,
-      dataParams
-    )
+
+    let rows: unknown[]
+    if (groupByItem) {
+      // Item-summary rows: aggregate counts per item, paginated by item. No serial-row
+      // joins (LP lateral, zones) so the collapsed list stays cheap at any depth.
+      const summaryRows = await query(
+        `SELECT
+          ssn.item_id,
+          i.item_name,
+          i.item_code,
+          COUNT(*)::int AS serial_count,
+          COUNT(*) FILTER (WHERE ssn.status = 'IN_STOCK')::int AS in_stock,
+          COUNT(*) FILTER (WHERE ssn.status = 'RESERVED')::int AS reserved,
+          COUNT(*) FILTER (WHERE ssn.status = 'DISPATCHED')::int AS dispatched,
+          COUNT(*) FILTER (WHERE ssn.status = 'CANCELLED')::int AS cancelled,
+          COUNT(DISTINCT ssn.warehouse_id)::int AS warehouse_count,
+          MAX(ssn.received_date) AS last_received,
+          MAX(CURRENT_DATE - ssn.received_date::date)::int AS max_age_days
+        FROM stock_serial_numbers ssn
+        JOIN items i ON i.id = ssn.item_id AND i.company_id = ssn.company_id
+        ${whereClause}
+        GROUP BY ssn.item_id, i.item_name, i.item_code
+        ORDER BY MAX(ssn.received_date) DESC, ssn.item_id
+        LIMIT $${limitParamIndex}
+        OFFSET $${offsetParamIndex}`,
+        dataParams
+      )
+      rows = summaryRows.rows
+    } else {
+      // Serial rows (default, or an item drill-down when item_id is supplied).
+      const serialRows = await query(
+        `SELECT ${STOCK_SERIAL_SELECT}
+        ${STOCK_SERIAL_JOINS}
+        ${whereClause}
+        ORDER BY ssn.received_date DESC
+        LIMIT $${limitParamIndex}
+        OFFSET $${offsetParamIndex}`,
+        dataParams
+      )
+      rows = serialRows.rows
+    }
 
     return paginated(
       {
-        rows: result.rows,
+        rows,
         summary: {
           in_stock: Number(summaryResult.rows[0]?.in_stock || 0),
           reserved: Number(summaryResult.rows[0]?.reserved || 0),
           dispatched: Number(summaryResult.rows[0]?.dispatched || 0),
           avg_age_days: Number(summaryResult.rows[0]?.avg_age_days || 0),
+          total_serials: serialTotal,
+          total_items: itemsTotal,
         },
       },
       {
