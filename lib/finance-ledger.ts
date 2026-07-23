@@ -7,6 +7,13 @@ type DBClient = {
   release: () => void
 }
 
+/**
+ * How much of the ledger to (re)post. `all` is the authoritative full recompute used by the
+ * finance report/read routes; `invoice` restricts posting to one invoice's issue/payment/note
+ * entries so a single-document mutation stays O(1) instead of resweeping the whole company.
+ */
+export type LedgerSyncScope = { kind: "all" } | { kind: "invoice"; invoiceId: number }
+
 type InvoiceSourceRow = {
   source_id: string
   txn_date: string
@@ -70,10 +77,16 @@ const SYSTEM_ACCOUNTS = [
   { code: "5100", name: "Cost of Goods Sold", type: "EXPENSE" },
 ] as const
 
-async function fetchInvoiceSourceRows(db: DBClient, companyId: number): Promise<InvoiceSourceRow[]> {
+async function fetchInvoiceSourceRows(
+  db: DBClient,
+  companyId: number,
+  invoiceId?: number | null
+): Promise<InvoiceSourceRow[]> {
   const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
   const hasNormalized = Boolean(normalizedTable.rows[0]?.table_name)
   if (hasNormalized) {
+    const params: Array<number> = [companyId]
+    const idFilter = invoiceId ? `AND ih.id = $${params.push(invoiceId)}` : ""
     const result = await db.query(
       `SELECT
          CAST(ih.id AS text) AS source_id,
@@ -86,8 +99,10 @@ async function fetchInvoiceSourceRows(db: DBClient, companyId: number): Promise<
          COALESCE(ih.paid_amount, 0)::numeric AS paid_amount
        FROM invoice_header ih
        JOIN clients c ON c.id = ih.client_id
-       WHERE ih.company_id = $1`,
-      [companyId]
+       WHERE ih.company_id = $1
+         AND ih.status <> 'VOID'
+         ${idFilter}`,
+      params
     )
     return result.rows as InvoiceSourceRow[]
   }
@@ -96,6 +111,8 @@ async function fetchInvoiceSourceRows(db: DBClient, companyId: number): Promise<
   const hasInvoicesTable = Boolean(invoicesTable.rows[0]?.table_name)
 
   if (hasInvoicesTable) {
+    const params: Array<number> = [companyId]
+    const idFilter = invoiceId ? `AND i.id = $${params.push(invoiceId)}` : ""
     const result = await db.query(
       `SELECT
          CAST(i.id AS text) AS source_id,
@@ -108,8 +125,9 @@ async function fetchInvoiceSourceRows(db: DBClient, companyId: number): Promise<
          COALESCE(i.paid_amount, 0)::numeric AS paid_amount
        FROM invoices i
        JOIN clients c ON c.id = i.client_id
-       WHERE i.company_id = $1`,
-      [companyId]
+       WHERE i.company_id = $1
+         ${idFilter}`,
+      params
     )
     return result.rows as InvoiceSourceRow[]
   }
@@ -234,7 +252,8 @@ async function fetchDoSourceRows(db: DBClient, companyId: number): Promise<DoSou
 
 async function fetchInvoicePaymentSourceRows(
   db: DBClient,
-  companyId: number
+  companyId: number,
+  invoiceId?: number | null
 ): Promise<InvoicePaymentSourceRow[]> {
   const paymentsTable = await db.query(`SELECT to_regclass('public.invoice_payments') AS table_name`)
   const hasPaymentsTable = Boolean(paymentsTable.rows[0]?.table_name)
@@ -243,6 +262,8 @@ async function fetchInvoicePaymentSourceRows(
   const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
   const hasNormalized = Boolean(normalizedTable.rows[0]?.table_name)
   if (hasNormalized) {
+    const params: Array<number> = [companyId]
+    const idFilter = invoiceId ? `AND ih.id = $${params.push(invoiceId)}` : ""
     const result = await db.query(
       `SELECT
          ip.id AS payment_id,
@@ -254,12 +275,16 @@ async function fetchInvoicePaymentSourceRows(
        JOIN invoice_header ih ON ih.id = ip.invoice_id
        JOIN clients c ON c.id = ih.client_id
        WHERE ip.company_id = $1
-         AND ih.company_id = $1`,
-      [companyId]
+         AND ih.company_id = $1
+         AND ih.status <> 'VOID'
+         ${idFilter}`,
+      params
     )
     return result.rows as InvoicePaymentSourceRow[]
   }
 
+  const params: Array<number> = [companyId]
+  const idFilter = invoiceId ? `AND i.id = $${params.push(invoiceId)}` : ""
   const result = await db.query(
     `SELECT
        ip.id AS payment_id,
@@ -271,20 +296,24 @@ async function fetchInvoicePaymentSourceRows(
      JOIN invoices i ON i.id = ip.invoice_id
      JOIN clients c ON c.id = i.client_id
      WHERE ip.company_id = $1
-       AND i.company_id = $1`,
-    [companyId]
+       AND i.company_id = $1
+       ${idFilter}`,
+    params
   )
   return result.rows as InvoicePaymentSourceRow[]
 }
 
 async function fetchCreditNoteSourceRows(
   db: DBClient,
-  companyId: number
+  companyId: number,
+  invoiceId?: number | null
 ): Promise<CreditNoteSourceRow[]> {
   const table = await db.query(`SELECT to_regclass('public.credit_note_header') AS table_name`)
   const hasTable = Boolean(table.rows[0]?.table_name)
   if (!hasTable) return []
 
+  const params: Array<number> = [companyId]
+  const idFilter = invoiceId ? `AND cnh.invoice_id = $${params.push(invoiceId)}` : ""
   const result = await db.query(
     `SELECT
        cnh.id AS note_id,
@@ -297,20 +326,24 @@ async function fetchCreditNoteSourceRows(
      FROM credit_note_header cnh
      JOIN clients c ON c.id = cnh.client_id
      WHERE cnh.company_id = $1
-       AND COALESCE(cnh.status, 'ISSUED') <> 'VOID'`,
-    [companyId]
+       AND COALESCE(cnh.status, 'ISSUED') <> 'VOID'
+       ${idFilter}`,
+    params
   )
   return result.rows as CreditNoteSourceRow[]
 }
 
 async function fetchDebitNoteSourceRows(
   db: DBClient,
-  companyId: number
+  companyId: number,
+  invoiceId?: number | null
 ): Promise<DebitNoteSourceRow[]> {
   const table = await db.query(`SELECT to_regclass('public.debit_note_header') AS table_name`)
   const hasTable = Boolean(table.rows[0]?.table_name)
   if (!hasTable) return []
 
+  const params: Array<number> = [companyId]
+  const idFilter = invoiceId ? `AND dnh.invoice_id = $${params.push(invoiceId)}` : ""
   const result = await db.query(
     `SELECT
        dnh.id AS note_id,
@@ -323,8 +356,9 @@ async function fetchDebitNoteSourceRows(
      FROM debit_note_header dnh
      JOIN clients c ON c.id = dnh.client_id
      WHERE dnh.company_id = $1
-       AND COALESCE(dnh.status, 'ISSUED') <> 'VOID'`,
-    [companyId]
+       AND COALESCE(dnh.status, 'ISSUED') <> 'VOID'
+       ${idFilter}`,
+    params
   )
   return result.rows as DebitNoteSourceRow[]
 }
@@ -356,8 +390,11 @@ async function replaceEntryLines(
  * invoice deleted outside the app (scripts, manual SQL, test teardown) leaves its
  * INVOICE_ISSUE / INVOICE_PAYMENT entries behind. Those orphans are never
  * regenerated and never removed, so they permanently distort the trial balance.
- * Drop any INVOICE-sourced entry whose invoice no longer exists before re-posting.
- * Scoped to source_module = 'INVOICE'; credit/debit notes post as 'MANUAL'.
+ * Drop any INVOICE-sourced entry whose invoice no longer exists OR has been VOIDed before
+ * re-posting. A voided invoice still exists (kept as a zeroed shell for audit) but must not
+ * contribute to the trial balance, and fetchInvoiceSourceRows no longer re-posts it, so its old
+ * issue/payment entries would otherwise linger. Scoped to source_module = 'INVOICE'; credit/debit
+ * notes post as 'MANUAL'.
  */
 async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
   const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
@@ -371,12 +408,42 @@ async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
           SELECT 1 FROM invoice_header ih
            WHERE ih.company_id = je.company_id
              AND ih.id::text = je.source_id
+             AND ih.status <> 'VOID'
         )`,
     [companyId]
   )
 }
 
-async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?: number) {
+/**
+ * Scoped counterpart of pruneOrphanedInvoiceEntries: drops the INVOICE-sourced entries for a
+ * SINGLE invoice when that invoice is now missing or VOID. Used by invoice-scoped ledger syncs so
+ * a void/delete of one invoice clears its own issue/payment entries without sweeping the company.
+ */
+async function pruneInvoiceEntriesForId(db: DBClient, companyId: number, invoiceId: number) {
+  const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
+  if (!normalizedTable.rows[0]?.table_name) return
+
+  await db.query(
+    `DELETE FROM journal_entries je
+      WHERE je.company_id = $1
+        AND je.source_module = 'INVOICE'
+        AND je.source_id = $2::text
+        AND NOT EXISTS (
+          SELECT 1 FROM invoice_header ih
+           WHERE ih.company_id = je.company_id
+             AND ih.id = $2
+             AND ih.status <> 'VOID'
+        )`,
+    [companyId, invoiceId]
+  )
+}
+
+async function syncFinanceLedgerCore(
+  db: DBClient,
+  companyId: number,
+  postedBy?: number,
+  scope: LedgerSyncScope = { kind: "all" }
+) {
   await setTenantContext(db, companyId)
   await ensureAccountingSchema(db)
   await ensureSystemAccounts(db, companyId)
@@ -393,12 +460,23 @@ async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?:
     throw new Error("Missing mandatory chart of accounts entries")
   }
 
-  await pruneOrphanedInvoiceEntries(db, companyId)
+  // Invoice-scoped sync: a single-document mutation (finalize/pay/void/credit-note/debit-note)
+  // only needs to (re)post that invoice's entries, not sweep the whole company's history. The
+  // GRN/DO inventory-capitalization entries are intentionally skipped here — they are posted by
+  // the full recompute that the finance report/read routes (trial balance, journals, invoice list,
+  // dashboard) already run, so they stay eventually-consistent without the per-mutation O(N) cost.
+  const scopedInvoiceId = scope.kind === "invoice" ? scope.invoiceId : null
 
-  const invoices = await fetchInvoiceSourceRows(db, companyId)
-  const paymentRows = await fetchInvoicePaymentSourceRows(db, companyId)
-  const creditNotes = await fetchCreditNoteSourceRows(db, companyId)
-  const debitNotes = await fetchDebitNoteSourceRows(db, companyId)
+  if (scopedInvoiceId) {
+    await pruneInvoiceEntriesForId(db, companyId, scopedInvoiceId)
+  } else {
+    await pruneOrphanedInvoiceEntries(db, companyId)
+  }
+
+  const invoices = await fetchInvoiceSourceRows(db, companyId, scopedInvoiceId)
+  const paymentRows = await fetchInvoicePaymentSourceRows(db, companyId, scopedInvoiceId)
+  const creditNotes = await fetchCreditNoteSourceRows(db, companyId, scopedInvoiceId)
+  const debitNotes = await fetchDebitNoteSourceRows(db, companyId, scopedInvoiceId)
   const hasDetailedPayments = paymentRows.length > 0
 
   for (const row of invoices) {
@@ -505,6 +583,11 @@ async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?:
     ])
   }
 
+  // GRN/DO inventory-capitalization entries are only reconciled on a full run (see note above).
+  if (scopedInvoiceId) {
+    return
+  }
+
   const grns = await fetchGrnSourceRows(db, companyId)
   for (const row of grns) {
     const amount = Number(row.amount || 0)
@@ -546,15 +629,24 @@ async function syncFinanceLedgerCore(db: DBClient, companyId: number, postedBy?:
   }
 }
 
-export async function syncFinanceLedgerInTransaction(db: DBClient, companyId: number, postedBy?: number) {
-  await syncFinanceLedgerCore(db, companyId, postedBy)
+export async function syncFinanceLedgerInTransaction(
+  db: DBClient,
+  companyId: number,
+  postedBy?: number,
+  scope: LedgerSyncScope = { kind: "all" }
+) {
+  await syncFinanceLedgerCore(db, companyId, postedBy, scope)
 }
 
-export async function syncFinanceLedger(companyId: number, postedBy?: number) {
+export async function syncFinanceLedger(
+  companyId: number,
+  postedBy?: number,
+  scope: LedgerSyncScope = { kind: "all" }
+) {
   const db = (await getClient()) as unknown as DBClient
   try {
     await db.query("BEGIN")
-    await syncFinanceLedgerCore(db, companyId, postedBy)
+    await syncFinanceLedgerCore(db, companyId, postedBy, scope)
     await db.query("COMMIT")
   } catch (error) {
     await db.query("ROLLBACK")

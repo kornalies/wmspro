@@ -628,12 +628,18 @@ export async function generateInvoiceDrafts(
        LIMIT 1`,
       [args.companyId, clientId, args.periodFrom, args.periodTo]
     )
+    // Period the invoice HEADER is stored under. Normally the requested window; for a
+    // supplementary invoice (see below) it is narrowed to the stranded charges' own span so it
+    // does not collide with the finalized invoice on uq_invoice_header_company_client_period.
+    let headerPeriodFrom = args.periodFrom
+    let headerPeriodTo = args.periodTo
+    // A supplementary invoice tops up charges stranded behind an already-finalized period invoice.
+    // Minimum-billing must NOT re-apply on it (the primary invoice for the period already carried
+    // the minimum), otherwise the minimum would be double-charged.
+    let isSupplementary = false
     let invoiceId: number
-    if (existingRes.rows.length) {
+    if (existingRes.rows.length && existingRes.rows[0].status === "DRAFT") {
       const existing = existingRes.rows[0]
-      if (existing.status !== "DRAFT") {
-        continue
-      }
       invoiceId = Number(existing.id)
       // Release any transactions billed to this DRAFT invoice in a PRIOR run back to the
       // unbilled pool before we wipe its lines. Regeneration deletes every line but only
@@ -657,7 +663,53 @@ export async function generateInvoiceDrafts(
       await db.query(`DELETE FROM invoice_tax_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, invoiceId])
       await db.query(`DELETE FROM invoice_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, invoiceId])
     } else {
-      const invoiceDate = args.periodTo
+      // A non-DRAFT invoice (FINALIZED/SENT/PAID) already occupies this exact period. Charges
+      // staged AFTER that invoice was finalized (event_date inside the closed period) are UNBILLED
+      // but can never join the locked invoice. Rather than skip the client and strand them forever,
+      // raise a SUPPLEMENTARY draft invoice (Option A) for exactly those leftover charges. Its
+      // header period is narrowed to the charges' own date span so it does not violate the
+      // uq_invoice_header_company_client_period unique constraint held by the finalized invoice.
+      if (existingRes.rows.length) {
+        isSupplementary = true
+        const spanRes = await db.query(
+          `SELECT MIN(event_date)::text AS min_date, MAX(event_date)::text AS max_date
+           FROM billing_transactions
+           WHERE company_id = $1
+             AND client_id = $2
+             AND status = 'UNBILLED'
+             AND event_date BETWEEN $3::date AND $4::date`,
+          [args.companyId, clientId, args.periodFrom, args.periodTo]
+        )
+        const minDate = spanRes.rows[0]?.min_date as string | null
+        const maxDate = spanRes.rows[0]?.max_date as string | null
+        if (!minDate || !maxDate) {
+          // Nothing stranded (finalized invoice already captured everything). Skip.
+          continue
+        }
+        headerPeriodFrom = String(minDate).slice(0, 10)
+        headerPeriodTo = String(maxDate).slice(0, 10)
+        // Guarantee the (company, client, period_from, period_to) tuple is free. If the stranded
+        // span happens to equal an existing invoice's period, walk period_from back one day at a
+        // time until the tuple is unique (period_to stays >= period_from, so ck_ih_period holds).
+        for (;;) {
+          const clash = await db.query(
+            `SELECT 1
+             FROM invoice_header
+             WHERE company_id = $1
+               AND client_id = $2
+               AND period_from = $3::date
+               AND period_to = $4::date
+             LIMIT 1`,
+            [args.companyId, clientId, headerPeriodFrom, headerPeriodTo]
+          )
+          if (!clash.rows.length) break
+          const back = new Date(`${headerPeriodFrom}T00:00:00.000Z`)
+          back.setUTCDate(back.getUTCDate() - 1)
+          headerPeriodFrom = back.toISOString().slice(0, 10)
+        }
+      }
+
+      const invoiceDate = headerPeriodTo
       const due = new Date(`${invoiceDate}T00:00:00.000Z`)
       due.setUTCDate(due.getUTCDate() + creditDays)
       const invoiceNumber = await nextInvoiceNumber(db, args.companyId, invoiceDate, prefix)
@@ -674,9 +726,9 @@ export async function generateInvoiceDrafts(
           invoiceNumber,
           clientId,
           String(profile?.billing_cycle || "MONTHLY"),
-          args.periodFrom,
-          args.periodTo,
-          monthLabel(args.periodFrom),
+          headerPeriodFrom,
+          headerPeriodTo,
+          monthLabel(headerPeriodFrom),
           invoiceDate,
           due.toISOString().slice(0, 10),
           currency,
@@ -699,7 +751,11 @@ export async function generateInvoiceDrafts(
     )
 
     let lineNo = 1
+    let taxableSoFar = 0
+    let sawInterState = false
     for (const tx of txns.rows) {
+      taxableSoFar += toNum(tx.amount)
+      if (toNum(tx.igst_amount) > 0) sawInterState = true
       const lineRes = await db.query(
         `INSERT INTO invoice_lines (
            company_id, invoice_id, line_no, charge_type, description, source_type, source_doc_id, source_line_id, source_ref_no,
@@ -757,6 +813,67 @@ export async function generateInvoiceDrafts(
         )
       }
       lineNo += 1
+    }
+
+    // Minimum billing: if the client's profile enforces a minimum and the period's taxable value
+    // falls short, add a MINIMUM top-up line for the shortfall so the invoice meets the floor.
+    // Only on the period's primary invoice (never a supplementary top-up) to avoid double-charging.
+    const minimumEnabled = profile?.minimum_billing_enabled === true
+    const minimumAmount = toNum(profile?.minimum_billing_amount, 0)
+    if (minimumEnabled && !isSupplementary && minimumAmount > 0 && taxableSoFar < minimumAmount) {
+      const shortfall = Number((minimumAmount - taxableSoFar).toFixed(2))
+      if (shortfall > 0) {
+        const gstRate = 18
+        const minTax = computeTax(shortfall, gstRate, sawInterState ? "INTER_STATE" : "INTRA_STATE")
+        const minLineRes = await db.query(
+          `INSERT INTO invoice_lines (
+             company_id, invoice_id, line_no, charge_type, description, source_type, source_doc_id, source_line_id, source_ref_no,
+             period_from, period_to, uom, quantity, rate, amount, tax_code, gst_rate, cgst_amount, sgst_amount, igst_amount,
+             total_tax_amount, gross_amount
+           ) VALUES (
+             $1,$2,$3,'MINIMUM',$4,'MANUAL',NULL,NULL,NULL,$5::date,$6::date,'UNIT',1,$7,$7,'GST',$8,$9,$10,$11,$12,$13
+           )
+           RETURNING id`,
+          [
+            args.companyId,
+            invoiceId,
+            lineNo,
+            `MINIMUM billing top-up (floor ${minimumAmount.toFixed(2)})`,
+            headerPeriodFrom,
+            headerPeriodTo,
+            shortfall,
+            gstRate,
+            minTax.cgstAmount,
+            minTax.sgstAmount,
+            minTax.igstAmount,
+            minTax.totalTaxAmount,
+            minTax.grossAmount,
+          ]
+        )
+        const minLineId = Number(minLineRes.rows[0].id)
+        if (minTax.cgstAmount > 0) {
+          await db.query(
+            `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
+             VALUES ($1,$2,$3,'CGST',$4,$5,$6)`,
+            [args.companyId, invoiceId, minLineId, gstRate / 2, shortfall, minTax.cgstAmount]
+          )
+        }
+        if (minTax.sgstAmount > 0) {
+          await db.query(
+            `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
+             VALUES ($1,$2,$3,'SGST',$4,$5,$6)`,
+            [args.companyId, invoiceId, minLineId, gstRate / 2, shortfall, minTax.sgstAmount]
+          )
+        }
+        if (minTax.igstAmount > 0) {
+          await db.query(
+            `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
+             VALUES ($1,$2,$3,'IGST',$4,$5,$6)`,
+            [args.companyId, invoiceId, minLineId, gstRate, shortfall, minTax.igstAmount]
+          )
+        }
+        lineNo += 1
+      }
     }
 
     const totals = await db.query(
@@ -934,13 +1051,11 @@ export async function finalizeInvoice(
   }
 
   const balance = Math.max(toNum(row.grand_total) - toNum(row.paid_amount), 0)
-  const dueDateSource = row.due_date
-  const dueDateValue =
-    typeof dueDateSource === "string" || typeof dueDateSource === "number" || dueDateSource instanceof Date
-      ? dueDateSource
-      : new Date().toISOString()
-  const dueDate = new Date(dueDateValue)
-  const status = balance <= 0 ? "PAID" : dueDate < new Date() ? "OVERDUE" : "FINALIZED"
+  // Never persist OVERDUE: it is a DERIVED display state that the invoices read route computes
+  // from due_date + balance. Storing it would violate ck_ih_status, which only permits
+  // DRAFT/FINALIZED/SENT/PAID/VOID — so finalizing (or paying) any past-due invoice used to throw
+  // a check-constraint violation.
+  const status = balance <= 0 ? "PAID" : "FINALIZED"
 
   await db.query(
     `UPDATE invoice_header
@@ -955,4 +1070,84 @@ export async function finalizeInvoice(
     [status, balance, args.userId ?? null, args.companyId, args.invoiceId]
   )
   return { status, balance }
+}
+
+/**
+ * Voids an invoice and RELEASES every transaction billed to it back to the unbilled pool.
+ *
+ * This is the missing half of the reversal workflow: GRN cancel / DO reverse refuse to touch a
+ * source document whose charge is already BILLED and tell the user to reverse the invoice first,
+ * but nothing previously flipped a BILLED transaction back to UNBILLED. After voiding, those
+ * charges are UNBILLED again, so the GRN/DO becomes reversible and the charges can be re-invoiced
+ * (the next generation run raises a fresh collision-safe invoice for them).
+ *
+ * Payments block the void: an invoice with money against it must have its payments removed/refunded
+ * first. The caller owns the transaction (BEGIN + setTenantContext) and should re-sync the finance
+ * ledger afterwards (syncFinanceLedger excludes VOID invoices and prunes their journal entries).
+ */
+export async function voidInvoice(
+  db: DBClient,
+  args: { companyId: number; invoiceId: number; userId?: number }
+) {
+  const invoiceRes = await db.query(
+    `SELECT id, status, paid_amount
+     FROM invoice_header
+     WHERE company_id = $1
+       AND id = $2
+     FOR UPDATE`,
+    [args.companyId, args.invoiceId]
+  )
+  if (!invoiceRes.rows.length) {
+    throw new Error("Invoice not found")
+  }
+  const row = invoiceRes.rows[0]
+  const currentStatus = String(row.status ?? "")
+  if (currentStatus === "VOID") {
+    return { status: "VOID" as const, releasedTxnCount: 0 }
+  }
+  if (toNum(row.paid_amount) > 0) {
+    throw new Error(
+      "Cannot void an invoice that has payments recorded. Remove or refund the payments first."
+    )
+  }
+
+  const releasedRes = await db.query(
+    `UPDATE billing_transactions
+     SET status = 'UNBILLED',
+         invoice_id = NULL,
+         billed_at = NULL,
+         billed_by = NULL,
+         updated_by = $3,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE company_id = $1
+       AND invoice_id = $2
+       AND status = 'BILLED'
+     RETURNING id`,
+    [args.companyId, args.invoiceId, args.userId ?? null]
+  )
+  const releasedTxnCount = releasedRes.rowCount ?? 0
+
+  // Drop the lines and zero the money so the void invoice stops contributing to receivables.
+  // The header (number + period) is retained as a VOID shell for audit; the released charges will
+  // be re-invoiced onto a new document on the next generation run.
+  await db.query(`DELETE FROM invoice_tax_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, args.invoiceId])
+  await db.query(`DELETE FROM invoice_lines WHERE company_id = $1 AND invoice_id = $2`, [args.companyId, args.invoiceId])
+
+  await db.query(
+    `UPDATE invoice_header
+     SET status = 'VOID',
+         taxable_amount = 0,
+         cgst_amount = 0,
+         sgst_amount = 0,
+         igst_amount = 0,
+         total_tax_amount = 0,
+         grand_total = 0,
+         balance_amount = 0,
+         updated_by = $3,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE company_id = $1
+       AND id = $2`,
+    [args.companyId, args.invoiceId, args.userId ?? null]
+  )
+  return { status: "VOID" as const, releasedTxnCount }
 }

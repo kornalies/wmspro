@@ -198,7 +198,10 @@ export async function POST(request: NextRequest) {
       [header.grand_total, session.userId, session.companyId, payload.invoice_id]
     )
 
-    await syncFinanceLedgerInTransaction(db, session.companyId, session.userId)
+    await syncFinanceLedgerInTransaction(db, session.companyId, session.userId, {
+      kind: "invoice",
+      invoiceId: payload.invoice_id,
+    })
     await db.query("COMMIT")
     if (idempotencyKey) {
       await saveIdempotentResponse({
