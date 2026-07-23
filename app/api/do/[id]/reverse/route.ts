@@ -114,7 +114,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       await db.query("ROLLBACK")
       return fail(
         "DO_BILLED",
-        `DO ${doHeader.do_number} is already billed in invoice(s): ${invoiceNumbers.join(", ")}. Please reverse the invoice first (credit note/unbill) and then retry DO reversal.`,
+        `DO ${doHeader.do_number} is already billed in invoice(s): ${invoiceNumbers.join(", ")}. Void the invoice first (Finance → invoice → Void releases the charge back to unbilled) and then retry DO reversal.`,
         409,
         {
           invoice_ids: billedRows.map((row) => Number(row.invoice_id)).filter(Boolean),

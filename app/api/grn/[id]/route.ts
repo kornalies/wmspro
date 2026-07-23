@@ -4,6 +4,7 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { getClient, query, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { ensureGrnManualSchema, ensureStockPutawaySchema } from "@/lib/db-bootstrap"
+import { confirmGrnInTransaction, GrnConfirmError } from "@/lib/grn-confirm"
 import { grnHeaderSchema, grnLineItemSchema } from "@/lib/validations"
 
 type RouteContext = {
@@ -198,7 +199,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         header.weight_kg ?? null,
         header.handling_type || null,
         header.source_channel || "WEB_MANUAL",
-        targetStatus,
+        // Always persist as DRAFT here; the shared confirmGrnInTransaction below flips it to
+        // CONFIRMED. This funnels the PUT edit-and-confirm path through the same confirmation
+        // side-effects (INBOUND_HANDLING billing + LP-linked serials) as POST /grn and the
+        // mobile approval, instead of silently skipping billing as this route used to.
+        "DRAFT",
         grnId,
         session.companyId,
       ]
@@ -223,10 +228,9 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       }
 
       let zoneLayoutId: number | null = null
-      let binLocation: string | null = null
       if (line.zone_layout_id) {
         const layoutRes = await db.query(
-          `SELECT id, warehouse_id, zone_code, rack_code, bin_code
+          `SELECT id, warehouse_id
            FROM warehouse_zone_layouts
            WHERE id = $1 AND company_id = $2 AND is_active = true`,
           [line.zone_layout_id, session.companyId]
@@ -241,14 +245,12 @@ export async function PUT(request: NextRequest, context: RouteContext) {
           return fail("VALIDATION_ERROR", "Selected zone layout does not belong to the selected warehouse", 400)
         }
         zoneLayoutId = Number(layout.id)
-        binLocation = `${layout.zone_code}/${layout.rack_code}/${layout.bin_code}`
       }
 
-      const lineRes = await db.query(
+      await db.query(
         `INSERT INTO grn_line_items (
           company_id, grn_header_id, line_number, item_id, quantity, uom, mrp, zone_layout_id, serial_numbers_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-        RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
         [
           session.companyId,
           grnId,
@@ -261,34 +263,25 @@ export async function PUT(request: NextRequest, context: RouteContext) {
           JSON.stringify(line.serial_numbers || []),
         ]
       )
+      // Stock serials are materialised by confirmGrnInTransaction (below) when confirming, so
+      // they carry lp_record_id linkage. Drafts keep serials in serial_numbers_json only.
+    }
 
-      if (targetStatus === "CONFIRMED") {
-        const grnLineId = lineRes.rows[0].id
-        for (const serialNumber of line.serial_numbers) {
-          await db.query(
-            `INSERT INTO stock_serial_numbers (
-              company_id, serial_number, item_id, client_id, warehouse_id,
-              status, received_date, grn_line_item_id, zone_layout_id, bin_location
-            ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8)`,
-            [
-              session.companyId,
-              serialNumber,
-              line.item_id,
-              header.client_id,
-              header.warehouse_id,
-              grnLineId,
-              zoneLayoutId,
-              binLocation,
-            ]
-          )
-        }
-      }
+    if (targetStatus === "CONFIRMED") {
+      await confirmGrnInTransaction(db, {
+        companyId: session.companyId,
+        userId: session.userId,
+        grnId: Number(grnId),
+      })
     }
 
     await db.query("COMMIT")
     return ok({ id: Number(grnId), status: targetStatus }, targetStatus === "DRAFT" ? "Draft updated" : "GRN confirmed")
   } catch (error: unknown) {
     await db.query("ROLLBACK")
+    if (error instanceof GrnConfirmError) {
+      return fail(error.code, error.message, error.status)
+    }
     const message = error instanceof Error ? error.message : "Failed to update GRN"
     return fail("UPDATE_FAILED", message, 400)
   } finally {
@@ -368,7 +361,7 @@ export async function DELETE(_: NextRequest, context: RouteContext) {
       await db.query("ROLLBACK")
       return fail(
         "GRN_BILLED",
-        `GRN ${header.grn_number} is already billed in invoice(s): ${invoiceNumbers.join(", ")}. Reverse the invoice first (credit note/unbill), then retry GRN cancellation.`,
+        `GRN ${header.grn_number} is already billed in invoice(s): ${invoiceNumbers.join(", ")}. Void the invoice first (Finance → invoice → Void releases the charge back to unbilled), then retry GRN cancellation.`,
         409
       )
     }

@@ -114,6 +114,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return fail("NOT_FOUND", "Invoice not found", 404)
     }
     const invoice = invoiceRes.rows[0]
+    // Payments only make sense against an issued invoice. Recording one on a DRAFT would let a
+    // subsequent draft regeneration rebuild the lines/totals while keeping paid_amount, drifting
+    // the balance. Require the invoice to be finalized/sent/paid first.
+    if (invoice.status === "DRAFT" || invoice.status === "VOID") {
+      await db.query("ROLLBACK")
+      return fail(
+        "WORKFLOW_BLOCKED",
+        `Cannot record a payment against a ${String(invoice.status).toLowerCase()} invoice. Finalize the invoice first.`,
+        409
+      )
+    }
     const grandTotal = Number(invoice.grand_total || 0)
     const currentPaid = Number(invoice.paid_amount || 0)
     const currentBalance = Number(invoice.balance_amount ?? Math.max(grandTotal - currentPaid, 0))
@@ -142,15 +153,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const newPaid = currentPaid + amount
     const newBalance = Math.max(grandTotal - newPaid, 0)
-    const dueDate = new Date(invoice.due_date)
-    const status =
-      newBalance <= 0
-        ? "PAID"
-        : dueDate < new Date()
-          ? "OVERDUE"
-          : invoice.status === "DRAFT"
-            ? "DRAFT"
-            : "FINALIZED"
+    // Never persist OVERDUE (derived at read time from due_date + balance; not in ck_ih_status).
+    // Fully-paid -> PAID; otherwise preserve the issued state (SENT stays SENT, else FINALIZED).
+    const status = newBalance <= 0 ? "PAID" : invoice.status === "SENT" ? "SENT" : "FINALIZED"
 
     const updatedRes = await db.query(
       `UPDATE invoice_header

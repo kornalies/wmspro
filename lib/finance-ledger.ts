@@ -86,7 +86,8 @@ async function fetchInvoiceSourceRows(db: DBClient, companyId: number): Promise<
          COALESCE(ih.paid_amount, 0)::numeric AS paid_amount
        FROM invoice_header ih
        JOIN clients c ON c.id = ih.client_id
-       WHERE ih.company_id = $1`,
+       WHERE ih.company_id = $1
+         AND ih.status <> 'VOID'`,
       [companyId]
     )
     return result.rows as InvoiceSourceRow[]
@@ -254,7 +255,8 @@ async function fetchInvoicePaymentSourceRows(
        JOIN invoice_header ih ON ih.id = ip.invoice_id
        JOIN clients c ON c.id = ih.client_id
        WHERE ip.company_id = $1
-         AND ih.company_id = $1`,
+         AND ih.company_id = $1
+         AND ih.status <> 'VOID'`,
       [companyId]
     )
     return result.rows as InvoicePaymentSourceRow[]
@@ -356,8 +358,11 @@ async function replaceEntryLines(
  * invoice deleted outside the app (scripts, manual SQL, test teardown) leaves its
  * INVOICE_ISSUE / INVOICE_PAYMENT entries behind. Those orphans are never
  * regenerated and never removed, so they permanently distort the trial balance.
- * Drop any INVOICE-sourced entry whose invoice no longer exists before re-posting.
- * Scoped to source_module = 'INVOICE'; credit/debit notes post as 'MANUAL'.
+ * Drop any INVOICE-sourced entry whose invoice no longer exists OR has been VOIDed before
+ * re-posting. A voided invoice still exists (kept as a zeroed shell for audit) but must not
+ * contribute to the trial balance, and fetchInvoiceSourceRows no longer re-posts it, so its old
+ * issue/payment entries would otherwise linger. Scoped to source_module = 'INVOICE'; credit/debit
+ * notes post as 'MANUAL'.
  */
 async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
   const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
@@ -371,6 +376,7 @@ async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
           SELECT 1 FROM invoice_header ih
            WHERE ih.company_id = je.company_id
              AND ih.id::text = je.source_id
+             AND ih.status <> 'VOID'
         )`,
     [companyId]
   )
