@@ -43,7 +43,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       invoiceId,
       userId: session.userId,
     })
-    await syncFinanceLedgerInTransaction(db, session.companyId, session.userId)
+    await syncFinanceLedgerInTransaction(db, session.companyId, session.userId, {
+      kind: "invoice",
+      invoiceId,
+    })
 
     await writeAudit(
       {

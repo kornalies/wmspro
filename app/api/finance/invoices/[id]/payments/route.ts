@@ -171,7 +171,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     await db.query("COMMIT")
     try {
-      await syncFinanceLedger(session.companyId, session.userId)
+      await syncFinanceLedger(session.companyId, session.userId, { kind: "invoice", invoiceId })
     } catch (ledgerError) {
       // Payment write is committed; ledger sync retry can run asynchronously.
       console.error("invoice payment ledger sync failed:", ledgerError)
