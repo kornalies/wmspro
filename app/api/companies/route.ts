@@ -39,6 +39,9 @@ const updateCompanySchema = z.object({
     .object({
       qc_gate_enabled: z.boolean().optional(),
       qc_disposition_enabled: z.boolean().optional(),
+      // When outbound handling revenue is recognised. Absent = DISPATCH, which
+      // is the pre-Track-A behaviour. See lib/company-settings.ts.
+      outbound_billing_trigger: z.enum(["DISPATCH", "GOODS_ISSUE"]).optional(),
     })
     .optional(),
 })

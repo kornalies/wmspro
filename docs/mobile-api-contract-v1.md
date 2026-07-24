@@ -205,6 +205,57 @@ Request:
 }
 ```
 
+## 13. Pack / Load Barcode Lookup
+`POST /api/mobile/scans/pack/lookup`
+
+Resolves a scanned barcode during packing or loading. Matches a pack unit code
+first, then a stock serial number.
+
+Request:
+```json
+{
+  "barcode": "PU-2026-00000042",
+  "do_id": 17
+}
+```
+
+Response (pack unit match) includes `can_close`, `can_issue` and `can_load` so
+the handheld does not re-derive the workflow rules:
+```json
+{
+  "match": "PACK_UNIT",
+  "pack_unit": { "id": 42, "pack_code": "PU-2026-00000042", "status": "CLOSED" },
+  "can_close": false,
+  "can_issue": true,
+  "can_load": false
+}
+```
+
+Response (serial match) reports whether the serial is still packable:
+```json
+{
+  "match": "SERIAL",
+  "serial": { "id": 900, "serial_number": "SER-10001", "status": "RESERVED" },
+  "can_pack": true,
+  "already_packed": false
+}
+```
+
+## Outbound Tail Mutations (Shared With Web)
+Packing, goods issue, loading and delivery finalize are **not** duplicated under
+`/api/mobile/*`. Mobile bearer tokens resolve through the same `getSession()`, so
+handhelds call the shared endpoints directly:
+
+- `POST /api/do/{id}/pack-units` — build a pack unit from scanned serials
+- `POST /api/do/pack-units/{id}/close` — close a pack unit
+- `POST /api/do/{id}/goods-issue` — generate the goods issue
+- `POST /api/do/{id}/loads` — open a load and assign issued pack units
+- `POST /api/do/loads/{id}/complete` — finish loading, raise the delivery note
+- `POST /api/do/delivery-notes/{id}/finalize` — finalize delivery, release stock
+
+This is deliberate: a second implementation of the packing rules would drift from
+the web one, which is the failure mode migration 059 had to repair for LPs.
+
 ## Planned (Not Implemented Yet in This Repo)
 - `POST /api/mobile/scans/gate/vehicle/lookup`
 - `POST /api/mobile/offline/sync`

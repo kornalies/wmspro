@@ -10,6 +10,17 @@ Source scope: `C:\Users\Admin-PC\wms-frontend` codebase (App Router pages, sideb
 - Mobile GRN Approval (`/grn/mobile-approvals`, `/grn/mobile-approvals/[id]`): review/approve/reject mobile captures into stock.
 - DO Processing (`/do`, `/do/new`, `/do/[id]`, `/do/[id]/fulfill`): outbound order handling and fulfillment.
 - DO Waves (`/do/waves`): wave creation/allocation/release/task flow.
+- Outbound Tail (API-only; no UI screens yet): pack units, goods issue, loading
+  and delivery note. Status flow
+  `PICKED -> PACKED -> STAGED -> ISSUED -> LOADED -> COMPLETED`, with stock
+  committing only at delivery-note finalize. The legacy one-step dispatch route
+  remains supported for bulk/non-palletised flows.
+  - `POST /api/do/{id}/pack-units`, `GET /api/do/{id}/pack-units`
+  - `POST /api/do/pack-units/{id}/close`
+  - `POST /api/do/{id}/goods-issue`
+  - `POST /api/do/{id}/loads`
+  - `POST /api/do/loads/{id}/complete`
+  - `POST /api/do/delivery-notes/{id}/finalize`
 - Stock Search (`/stock/search`): item/serial-level stock lookup.
 - Put Away / Transfer (`/stock/transfer`): stock placement and internal movements.
 - Stock Movements (`/stock/movements`): movement history trail.
@@ -49,6 +60,13 @@ Source scope: `C:\Users\Admin-PC\wms-frontend` codebase (App Router pages, sideb
 - Portal Disputes (`/portal/disputes`)
 - Portal SLA (`/portal/sla`)
 - Portal ASN (`/portal/asn`)
+
+### 1.5a Per-Tenant Behaviour Toggles (`companies.settings`)
+- `qc_gate_enabled`, `qc_disposition_enabled`
+- `outbound_billing_trigger`: `DISPATCH` (default, pre-existing behaviour) or
+  `GOODS_ISSUE`. Controls when `OUTBOUND_HANDLING` revenue is recognised.
+  On either setting the charge stages exactly once per DO, whichever path
+  fulfils the order. Read via `lib/company-settings.ts`.
 
 ### 1.6 Security / Control Model
 - Role/permission-based route access enforcement (`lib/route-permissions.ts`).
