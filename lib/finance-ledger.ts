@@ -374,15 +374,21 @@ async function replaceEntryLines(
     entryId,
   ])
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]
-    await db.query(
-      `INSERT INTO journal_lines (
-        company_id, journal_entry_id, line_no, account_id, debit, credit, narration
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [companyId, entryId, i + 1, line.accountId, line.debit, line.credit, line.narration]
-    )
-  }
+  if (lines.length === 0) return
+
+  // Insert every line for this entry in a single statement rather than one round-trip per line.
+  const values: unknown[] = [companyId, entryId]
+  const tuples = lines.map((line, i) => {
+    const base = values.length
+    values.push(i + 1, line.accountId, line.debit, line.credit, line.narration)
+    return `($1, $2, $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`
+  })
+  await db.query(
+    `INSERT INTO journal_lines (
+      company_id, journal_entry_id, line_no, account_id, debit, credit, narration
+    ) VALUES ${tuples.join(", ")}`,
+    values
+  )
 }
 
 /**

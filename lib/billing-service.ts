@@ -1,3 +1,5 @@
+import { DEFAULT_GST_RATE, computeGstSplit, round2 } from "@/lib/money"
+
 type DBClient = {
   query: (
     text: string,
@@ -19,7 +21,7 @@ type SupplyType = "INTRA_STATE" | "INTER_STATE"
 type CalcMethod = "FLAT" | "PER_UNIT" | "SLAB" | "PERCENT"
 type SlabMode = "ABSOLUTE" | "MARGINAL"
 type BillingCycle = "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY"
-const OPERATIONAL_CHARGE_TYPES: ChargeType[] = ["OUTBOUND_HANDLING", "STORAGE", "VAS"]
+const OPERATIONAL_CHARGE_TYPES: ChargeType[] = ["INBOUND_HANDLING", "OUTBOUND_HANDLING", "STORAGE", "VAS"]
 
 function toNum(value: unknown, fallback = 0) {
   const n = Number(value)
@@ -144,24 +146,9 @@ async function resolveSupplyType(
 }
 
 function computeTax(amount: number, gstRate: number, supplyType: SupplyType) {
-  const tax = Number(((amount * gstRate) / 100).toFixed(2))
-  if (supplyType === "INTER_STATE") {
-    return {
-      cgstAmount: 0,
-      sgstAmount: 0,
-      igstAmount: tax,
-      totalTaxAmount: tax,
-      grossAmount: Number((amount + tax).toFixed(2)),
-    }
-  }
-  const half = Number((tax / 2).toFixed(2))
-  return {
-    cgstAmount: half,
-    sgstAmount: half,
-    igstAmount: 0,
-    totalTaxAmount: Number((half + half).toFixed(2)),
-    grossAmount: Number((amount + half + half).toFixed(2)),
-  }
+  // Delegated to the shared money helper so every charge, invoice line, and note rounds identically
+  // (integer-paise) and CGST + SGST always reconciles to the total tax.
+  return computeGstSplit(amount, gstRate, supplyType)
 }
 
 export async function assertInvoiceOperationalValueCompliance(
@@ -317,7 +304,7 @@ async function resolveRate(
       if (amount < minCharge) amount = minCharge
       if (maxCharge !== null && amount > maxCharge) amount = maxCharge
 
-      amount = Number(amount.toFixed(2))
+      amount = round2(amount)
       const effectiveRate = q > 0 ? Number((amount / q).toFixed(4)) : Number(amount.toFixed(4))
 
       return {
@@ -353,8 +340,8 @@ async function resolveRate(
       : chargeType === "INBOUND_HANDLING" || chargeType === "OUTBOUND_HANDLING"
         ? toNum(row.handling_rate)
         : 0
-  const amount = Number((Math.max(toNum(quantity), 0) * rate).toFixed(2))
-  return { isResolved: true, rateMasterId: null, rateDetailId: null, rate, amount, gstRate: 18 }
+  const amount = round2(Math.max(toNum(quantity), 0) * rate)
+  return { isResolved: true, rateMasterId: null, rateDetailId: null, rate, amount, gstRate: DEFAULT_GST_RATE }
 }
 
 export async function stageChargeTransaction(
@@ -392,7 +379,7 @@ export async function stageChargeTransaction(
   )
   const supplyType = await resolveSupplyType(db, args.companyId, args.clientId, args.warehouseId)
   const status = rateInfo.isResolved ? "UNBILLED" : "UNRATED"
-  const amount = rateInfo.isResolved ? Number(toNum(rateInfo.amount, qty * rateInfo.rate).toFixed(2)) : 0
+  const amount = rateInfo.isResolved ? round2(toNum(rateInfo.amount, qty * rateInfo.rate)) : 0
   const taxes = rateInfo.isResolved
     ? computeTax(amount, rateInfo.gstRate, supplyType)
     : {
@@ -613,6 +600,11 @@ export async function generateInvoiceDrafts(
 
   for (const row of clientsRes.rows) {
     const clientId = Number(row.client_id)
+    // Serialize concurrent generation for the same (company, client). Two runs racing the same
+    // UNBILLED pool would otherwise both select the rows, both build lines, and collide on
+    // uq_invoice_header_company_client_period (surfacing as a 500). The xact-scoped lock makes the
+    // second run wait for the first to commit, then it correctly finds the pool already BILLED.
+    await db.query(`SELECT pg_advisory_xact_lock($1, $2)`, [args.companyId, clientId])
     const profile = await getClientProfile(db, args.companyId, clientId)
     const currency = String(profile?.currency || "INR")
     const prefix = String(profile?.invoice_prefix || "INV")
@@ -739,81 +731,65 @@ export async function generateInvoiceDrafts(
       invoiceId = Number(created.rows[0].id)
     }
 
-    const txns = await db.query(
-      `SELECT *
-       FROM billing_transactions
-       WHERE company_id = $1
-         AND client_id = $2
-         AND status = 'UNBILLED'
-         AND event_date BETWEEN $3::date AND $4::date
-       ORDER BY event_date, id`,
-      [args.companyId, clientId, args.periodFrom, args.periodTo]
+    // Set-based generation: copy every UNBILLED charge for this client/period into invoice_lines in
+    // a single round-trip, then derive the tax lines from the inserted rows. Amounts are copied
+    // verbatim from billing_transactions (no re-pricing here), so this is a pure throughput change —
+    // the posted values are identical to the prior per-row loop. line_no follows (event_date, id).
+    await db.query(
+      `INSERT INTO invoice_lines (
+         company_id, invoice_id, line_no, charge_type, description, source_type, source_doc_id,
+         source_line_id, source_ref_no, period_from, period_to, uom, quantity, rate, amount,
+         tax_code, gst_rate, cgst_amount, sgst_amount, igst_amount, total_tax_amount, gross_amount
+       )
+       SELECT
+         bt.company_id,
+         $2,
+         ROW_NUMBER() OVER (ORDER BY bt.event_date, bt.id),
+         bt.charge_type,
+         bt.charge_type || ' (' || bt.source_type || ':' ||
+           COALESCE(NULLIF(bt.source_ref_no, ''), bt.source_doc_id::text, bt.id::text) || ')',
+         bt.source_type, bt.source_doc_id, bt.source_line_id, bt.source_ref_no,
+         bt.period_from, bt.period_to, bt.uom, bt.quantity, bt.rate, bt.amount,
+         bt.tax_code, bt.gst_rate, bt.cgst_amount, bt.sgst_amount, bt.igst_amount,
+         bt.total_tax_amount, bt.gross_amount
+       FROM billing_transactions bt
+       WHERE bt.company_id = $1
+         AND bt.client_id = $3
+         AND bt.status = 'UNBILLED'
+         AND bt.event_date BETWEEN $4::date AND $5::date`,
+      [args.companyId, invoiceId, clientId, args.periodFrom, args.periodTo]
     )
 
-    let lineNo = 1
-    let taxableSoFar = 0
-    let sawInterState = false
-    for (const tx of txns.rows) {
-      taxableSoFar += toNum(tx.amount)
-      if (toNum(tx.igst_amount) > 0) sawInterState = true
-      const lineRes = await db.query(
-        `INSERT INTO invoice_lines (
-           company_id, invoice_id, line_no, charge_type, description, source_type, source_doc_id, source_line_id, source_ref_no,
-           period_from, period_to, uom, quantity, rate, amount, tax_code, gst_rate, cgst_amount, sgst_amount, igst_amount,
-           total_tax_amount, gross_amount
-         ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,$11::date,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
-         )
-         RETURNING id`,
-        [
-          args.companyId,
-          invoiceId,
-          lineNo,
-          tx.charge_type,
-          `${tx.charge_type} (${tx.source_type}:${tx.source_ref_no || tx.source_doc_id || tx.id})`,
-          tx.source_type,
-          tx.source_doc_id,
-          tx.source_line_id,
-          tx.source_ref_no,
-          tx.period_from,
-          tx.period_to,
-          tx.uom,
-          tx.quantity,
-          tx.rate,
-          tx.amount,
-          tx.tax_code,
-          tx.gst_rate,
-          tx.cgst_amount,
-          tx.sgst_amount,
-          tx.igst_amount,
-          tx.total_tax_amount,
-          tx.gross_amount,
-        ]
-      )
-      const invoiceLineId = Number(lineRes.rows[0].id)
-      if (toNum(tx.cgst_amount) > 0) {
-        await db.query(
-          `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
-           VALUES ($1,$2,$3,'CGST',$4,$5,$6)`,
-          [args.companyId, invoiceId, invoiceLineId, toNum(tx.gst_rate) / 2, tx.amount, tx.cgst_amount]
-        )
-      }
-      if (toNum(tx.sgst_amount) > 0) {
-        await db.query(
-          `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
-           VALUES ($1,$2,$3,'SGST',$4,$5,$6)`,
-          [args.companyId, invoiceId, invoiceLineId, toNum(tx.gst_rate) / 2, tx.amount, tx.sgst_amount]
-        )
-      }
-      if (toNum(tx.igst_amount) > 0) {
-        await db.query(
-          `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
-           VALUES ($1,$2,$3,'IGST',$4,$5,$6)`,
-          [args.companyId, invoiceId, invoiceLineId, tx.gst_rate, tx.amount, tx.igst_amount]
-        )
-      }
-      lineNo += 1
-    }
+    await db.query(
+      `INSERT INTO invoice_tax_lines (company_id, invoice_id, invoice_line_id, tax_type, tax_rate, taxable_amount, tax_amount)
+       SELECT il.company_id, il.invoice_id, il.id, 'CGST', il.gst_rate / 2, il.amount, il.cgst_amount
+         FROM invoice_lines il
+        WHERE il.company_id = $1 AND il.invoice_id = $2 AND il.cgst_amount > 0
+       UNION ALL
+       SELECT il.company_id, il.invoice_id, il.id, 'SGST', il.gst_rate / 2, il.amount, il.sgst_amount
+         FROM invoice_lines il
+        WHERE il.company_id = $1 AND il.invoice_id = $2 AND il.sgst_amount > 0
+       UNION ALL
+       SELECT il.company_id, il.invoice_id, il.id, 'IGST', il.gst_rate, il.amount, il.igst_amount
+         FROM invoice_lines il
+        WHERE il.company_id = $1 AND il.invoice_id = $2 AND il.igst_amount > 0`,
+      [args.companyId, invoiceId]
+    )
+
+    // Header-level aggregates the minimum-billing top-up needs: current taxable total, the next free
+    // line number, and whether any line is inter-state (drives CGST/SGST vs IGST on the top-up).
+    const lineAgg = await db.query(
+      `SELECT
+         COALESCE(SUM(amount), 0)::numeric AS taxable,
+         COALESCE(MAX(line_no), 0)::int AS max_line_no,
+         COALESCE(BOOL_OR(igst_amount > 0), false) AS saw_inter
+       FROM invoice_lines
+       WHERE company_id = $1 AND invoice_id = $2`,
+      [args.companyId, invoiceId]
+    )
+    const taxableSoFar = toNum(lineAgg.rows[0]?.taxable, 0)
+    const sawInterState = lineAgg.rows[0]?.saw_inter === true
+    let lineNo = toNum(lineAgg.rows[0]?.max_line_no, 0) + 1
 
     // Minimum billing: if the client's profile enforces a minimum and the period's taxable value
     // falls short, add a MINIMUM top-up line for the shortfall so the invoice meets the floor.
@@ -821,9 +797,9 @@ export async function generateInvoiceDrafts(
     const minimumEnabled = profile?.minimum_billing_enabled === true
     const minimumAmount = toNum(profile?.minimum_billing_amount, 0)
     if (minimumEnabled && !isSupplementary && minimumAmount > 0 && taxableSoFar < minimumAmount) {
-      const shortfall = Number((minimumAmount - taxableSoFar).toFixed(2))
+      const shortfall = round2(minimumAmount - taxableSoFar)
       if (shortfall > 0) {
-        const gstRate = 18
+        const gstRate = DEFAULT_GST_RATE
         const minTax = computeTax(shortfall, gstRate, sawInterState ? "INTER_STATE" : "INTRA_STATE")
         const minLineRes = await db.query(
           `INSERT INTO invoice_lines (
