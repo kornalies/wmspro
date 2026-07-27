@@ -42,6 +42,9 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   // fetch behind it will only ever 401.
   { href: "/documents", permissions: ["do.manage"] },
   { href: "/stock/transfer", permissions: ["stock.putaway.manage"] },
+  // Approving a variance writes stock off, so it needs the same permission as
+  // any other stock mutation rather than a read-only stock role.
+  { href: "/stock/cycle-counts", permissions: ["stock.putaway.manage"] },
   { href: "/gate/in", permissions: ["gate.in.create"] },
   { href: "/gate/out", permissions: ["gate.out.create"] },
   { href: "/admin/onboarding", permissions: ["master.data.manage", "admin.users.manage", "admin.companies.manage"] },
