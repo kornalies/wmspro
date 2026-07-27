@@ -138,9 +138,14 @@ export function DocumentSheet({ model }: { model: DocumentModel }) {
       <header className="doc-letterhead" style={{ borderBottomColor: accent }}>
         <div className="doc-letterhead-left">
           {model.branding.logoUrl ? (
-            // Tenant logos are arbitrary external URLs, so next/image's loader
-            // would need every tenant domain whitelisted. A plain img keeps
-            // onboarding a logo a settings change rather than a deploy.
+            // Tenant logos are arbitrary URLs typed into tenant settings, so
+            // next/image's loader would need every tenant domain whitelisted. A
+            // plain img keeps onboarding a logo a settings change, not a deploy.
+            //
+            // NOTE: proxy.ts sets img-src 'self' data: blob:, so a logo hosted on
+            // an external domain is blocked and the letterhead falls back to the
+            // company name. Same-origin paths and data: URIs work. The portal
+            // letterhead has the same constraint.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={model.branding.logoUrl} alt="" className="doc-logo" />
           ) : null}

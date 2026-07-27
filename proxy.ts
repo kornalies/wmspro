@@ -122,6 +122,7 @@ export default async function proxy(request: NextRequest) {
     path.startsWith("/dashboard") ||
     path.startsWith("/grn") ||
     path.startsWith("/do") ||
+    path.startsWith("/documents") ||
     path.startsWith("/stock") ||
     path.startsWith("/gate") ||
     path.startsWith("/admin") ||
@@ -243,6 +244,7 @@ export const config = {
     "/dashboard/:path*",
     "/grn/:path*",
     "/do/:path*",
+    "/documents/:path*",
     "/stock/:path*",
     "/gate/:path*",
     "/admin/:path*",

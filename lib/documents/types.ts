@@ -1,11 +1,12 @@
 /**
  * The document engine's single contract.
  *
- * Before this existed the codebase had four ways to produce a printable
+ * Before this existed the codebase had three ways to produce a printable
  * document: browser-print pages (GRN, DO list), a hand-rolled PDF byte writer
- * (app/api/do/[id]/download), and client-side jsPDF (lib/export-utils). Adding
- * the six outbound documents on top of that would have meant a fifth. Every
- * document now compiles to this one shape and is rendered by one component.
+ * that emitted raw PDF operators (since retired), and client-side jsPDF
+ * (lib/export-utils, still used for tabular report exports). Adding the six
+ * outbound documents on top of that would have meant a fourth. Every document
+ * now compiles to this one shape and is rendered by one component.
  *
  * The model is deliberately presentation-agnostic: it carries no JSX and no CSS,
  * only the data and its intended grouping. That is what lets the HTML renderer
