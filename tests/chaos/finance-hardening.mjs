@@ -284,7 +284,10 @@ async function scenarioFH5VoidReleasesCharges(token, fixtures) {
   }
 
   await withDb(async (client) => {
-    await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+    // Session-scoped (is_local = false): there is no surrounding BEGIN here, so a
+    // transaction-local setting would apply to this statement only and RLS would filter
+    // the assertions below down to zero rows — reporting "undefined" instead of the real values.
+    await client.query("SELECT set_config('app.company_id', $1, false)", [String(fixtures.tenantA.companyId)])
     const txn = await client.query(
       "SELECT status, invoice_id FROM billing_transactions WHERE id = $1",
       [billedTxId]

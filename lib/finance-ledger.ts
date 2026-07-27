@@ -424,6 +424,10 @@ async function pruneOrphanedInvoiceEntries(db: DBClient, companyId: number) {
  * Scoped counterpart of pruneOrphanedInvoiceEntries: drops the INVOICE-sourced entries for a
  * SINGLE invoice when that invoice is now missing or VOID. Used by invoice-scoped ledger syncs so
  * a void/delete of one invoice clears its own issue/payment entries without sweeping the company.
+ *
+ * $2 is CAST explicitly on BOTH sides: journal_entries.source_id is text while invoice_header.id is
+ * integer, and a bare `$2::text` made Postgres resolve the placeholder as text for the whole
+ * statement, so the `ih.id = $2` comparison failed with "operator does not exist: integer = text".
  */
 async function pruneInvoiceEntriesForId(db: DBClient, companyId: number, invoiceId: number) {
   const normalizedTable = await db.query(`SELECT to_regclass('public.invoice_header') AS table_name`)
@@ -433,11 +437,11 @@ async function pruneInvoiceEntriesForId(db: DBClient, companyId: number, invoice
     `DELETE FROM journal_entries je
       WHERE je.company_id = $1
         AND je.source_module = 'INVOICE'
-        AND je.source_id = $2::text
+        AND je.source_id = CAST($2 AS integer)::text
         AND NOT EXISTS (
           SELECT 1 FROM invoice_header ih
            WHERE ih.company_id = je.company_id
-             AND ih.id = $2
+             AND ih.id = CAST($2 AS integer)
              AND ih.status <> 'VOID'
         )`,
     [companyId, invoiceId]
