@@ -218,6 +218,41 @@ const accountingDDL = [
   "CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_lines_entry_line_no ON journal_lines(journal_entry_id, line_no)",
 ]
 
+/**
+ * Run one bootstrap statement without letting a failure poison an enclosing
+ * transaction.
+ *
+ * Swallowing an insufficient-privilege error is not enough on its own: the
+ * failed statement has already put the caller's transaction into the aborted
+ * state, so every subsequent command returns "current transaction is aborted"
+ * and the real work fails with an error that points nowhere near the cause.
+ * A SAVEPOINT scopes the failure to the one statement.
+ *
+ * SAVEPOINT is only legal inside a transaction block. Callers that pass a
+ * pooled client outside one fall back to running the statement bare, where an
+ * error has nothing to poison anyway.
+ */
+async function runOneStatement(statement: string, db: DBClient) {
+  let savepointHeld = false
+  try {
+    await db.query("SAVEPOINT wms_bootstrap_stmt")
+    savepointHeld = true
+  } catch {
+    // Not inside a transaction — nothing to protect.
+  }
+
+  try {
+    await db.query(statement)
+    if (savepointHeld) await db.query("RELEASE SAVEPOINT wms_bootstrap_stmt")
+  } catch (error) {
+    if (savepointHeld) {
+      await db.query("ROLLBACK TO SAVEPOINT wms_bootstrap_stmt")
+      await db.query("RELEASE SAVEPOINT wms_bootstrap_stmt")
+    }
+    throw error
+  }
+}
+
 async function runStatements(
   statements: string[],
   db?: DBClient
@@ -228,7 +263,7 @@ async function runStatements(
   for (const statement of statements) {
     try {
       if (db) {
-        await db.query(statement)
+        await runOneStatement(statement, db)
       } else {
         await query(statement)
       }
