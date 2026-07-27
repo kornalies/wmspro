@@ -11,6 +11,12 @@ import {
   requireScope,
 } from "@/lib/policy/guards"
 import { OutboundTailError, lockDO } from "@/lib/outbound-tail"
+import {
+  allocatableStockPredicate,
+  allocationOrderBy,
+  describeAllocationRule,
+  normalizeAllocationRule,
+} from "@/lib/allocation"
 
 /**
  * The whole outbound tail for one DO in a single read.
@@ -108,8 +114,17 @@ export async function GET(_: NextRequest, context: RouteContext) {
     // Which picked-but-unpacked stock is still available to build a pack unit
     // from. Serials already in a pack unit are excluded by the anti-join, which
     // is the same rule uq_pack_unit_serial enforces at write time.
+    //
+    // Ordered by the DO's allocation rule and filtered by the same expired /
+    // short-shelf-life predicate the commit path uses. The pack screen offers
+    // this list in order, so an operator packing top-down on a FEFO order packs
+    // FEFO; leaving it in id order would have quietly undone the rule at the one
+    // step where a human actually chooses the stock.
+    const rule = normalizeAllocationRule(doRow.allocationRule)
     const packableSerials = await db.query(
       `SELECT s.id, s.serial_number, s.status, s.bin_location, s.lp_record_id,
+              s.batch_number, s.expiry_date,
+              (s.expiry_date - CURRENT_DATE) AS days_to_expiry,
               dli.id AS do_line_item_id, dli.line_number,
               i.item_code, i.item_name
        FROM do_line_items dli
@@ -125,7 +140,8 @@ export async function GET(_: NextRequest, context: RouteContext) {
        WHERE dli.company_id = $1
          AND dli.do_header_id = $2
          AND pus.id IS NULL
-       ORDER BY dli.line_number ASC, s.id ASC`,
+         AND ${allocatableStockPredicate("s", "i")}
+       ORDER BY dli.line_number ASC, ${allocationOrderBy(rule, "s")}`,
       [session.companyId, doRow.id, doRow.warehouseId, doRow.clientId]
     )
 
@@ -137,6 +153,8 @@ export async function GET(_: NextRequest, context: RouteContext) {
       do_status: doRow.status,
       warehouse_id: doRow.warehouseId,
       client_id: doRow.clientId,
+      allocation_rule: rule,
+      allocation_note: describeAllocationRule(rule),
       pack_units: packUnits.rows,
       goods_issues: goodsIssues.rows,
       loads: loads.rows,

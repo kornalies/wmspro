@@ -4,13 +4,21 @@
  * Two paths reach the same end state -- serials marked DISPATCHED and
  * do_line_items.quantity_dispatched incremented:
  *
- *   1. the legacy one-step dispatch route, which picks serials itself (FIFO)
+ *   1. the legacy one-step dispatch route, which picks serials itself using the
+ *      DO's allocation rule (lib/allocation.ts)
  *   2. delivery-note finalize (Track A3), which commits the exact serials that
  *      were physically packed and loaded
  *
  * Both funnel through applyStockCommit so the rules cannot drift apart. This
  * mirrors how confirmGrnInTransaction is shared across the three inbound paths.
  */
+
+import {
+  allocatableStockPredicate,
+  allocationOrderBy,
+  normalizeAllocationRule,
+  type AllocationRule,
+} from "@/lib/allocation"
 
 type DBClient = {
   query: (
@@ -61,10 +69,17 @@ async function applyStockCommit(
 }
 
 /**
- * FIFO selection used by the legacy dispatch route: prefer serials already
- * reserved against this line, then oldest unreserved stock.
+ * Automatic selection used by the legacy dispatch route: prefer serials already
+ * reserved against this line, then unreserved stock in the order the DO's
+ * allocation rule dictates.
+ *
+ * Ordering and the expired / short-shelf-life exclusions come from
+ * lib/allocation.ts so this path cannot disagree with the advisory endpoint or
+ * the packable pool about what a rule means. Before Track D this ordered by
+ * received_date unconditionally, which is why a FEFO delivery order shipped
+ * FIFO.
  */
-export async function commitDoLineStockFifo(
+export async function commitDoLineStock(
   db: DBClient,
   args: {
     companyId: number
@@ -73,26 +88,29 @@ export async function commitDoLineStockFifo(
     itemId: number
     doLineItemId: number
     quantity: number
+    allocationRule?: AllocationRule
   }
 ) {
   const { companyId, warehouseId, clientId, itemId, doLineItemId, quantity } = args
   if (quantity <= 0) return 0
+  const rule = normalizeAllocationRule(args.allocationRule)
 
   const stockRows = await db.query(
-    `SELECT id
-     FROM stock_serial_numbers
-     WHERE warehouse_id = $1
-       AND client_id = $2
-       AND item_id = $3
-       AND company_id = $4
+    `SELECT s.id
+     FROM stock_serial_numbers s
+     JOIN items i ON i.id = s.item_id AND i.company_id = s.company_id
+     WHERE s.warehouse_id = $1
+       AND s.client_id = $2
+       AND s.item_id = $3
+       AND s.company_id = $4
        AND (
-         (status = 'RESERVED' AND do_line_item_id = $5)
-         OR (status = 'IN_STOCK' AND do_line_item_id IS NULL)
+         (s.status = 'RESERVED' AND s.do_line_item_id = $5)
+         OR (s.status = 'IN_STOCK' AND s.do_line_item_id IS NULL)
        )
+       AND ${allocatableStockPredicate("s", "i")}
      ORDER BY
-       CASE WHEN status = 'RESERVED' THEN 0 ELSE 1 END,
-       received_date ASC,
-       id ASC
+       CASE WHEN s.status = 'RESERVED' THEN 0 ELSE 1 END,
+       ${allocationOrderBy(rule, "s")}
      LIMIT $6
      FOR UPDATE SKIP LOCKED`,
     [warehouseId, clientId, itemId, companyId, doLineItemId, quantity]
@@ -100,9 +118,30 @@ export async function commitDoLineStockFifo(
 
   const serialIds = stockRows.rows.map((row) => Number(row.id)).filter(Boolean)
   if (serialIds.length < quantity) {
+    // Distinguish "no stock" from "stock exists but is not allocatable".
+    // Reporting a bare shortage when the real cause is expiry sends a supervisor
+    // hunting for inventory that is sitting right there, blocked on purpose.
+    const blocked = await db.query(
+      `SELECT COUNT(*)::int AS n
+       FROM stock_serial_numbers s
+       JOIN items i ON i.id = s.item_id AND i.company_id = s.company_id
+       WHERE s.warehouse_id = $1
+         AND s.client_id = $2
+         AND s.item_id = $3
+         AND s.company_id = $4
+         AND (
+           (s.status = 'RESERVED' AND s.do_line_item_id = $5)
+           OR (s.status = 'IN_STOCK' AND s.do_line_item_id IS NULL)
+         )
+         AND NOT (${allocatableStockPredicate("s", "i")})`,
+      [warehouseId, clientId, itemId, companyId, doLineItemId]
+    )
+    const blockedCount = Number(blocked.rows[0]?.n ?? 0)
     throw new OutboundStockError(
       "INVENTORY_VALIDATION_FAILED",
-      `Insufficient inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}.`
+      blockedCount > 0
+        ? `Insufficient allocatable inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}. ${blockedCount} unit(s) are excluded as expired or inside the minimum shelf life.`
+        : `Insufficient inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}.`
     )
   }
 

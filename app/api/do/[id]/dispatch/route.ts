@@ -8,7 +8,8 @@ import { stageChargeTransaction } from "@/lib/billing-service"
 import { getOutboundBillingTrigger } from "@/lib/company-settings"
 import { writeAudit } from "@/lib/audit"
 import { getDOStatusErrorMessage, isDOStatus, normalizeDOStatus } from "@/lib/do-status"
-import { OutboundStockError, commitDoLineStockFifo } from "@/lib/outbound-stock"
+import { OutboundStockError, commitDoLineStock } from "@/lib/outbound-stock"
+import { normalizeAllocationRule } from "@/lib/allocation"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
   enforceWorkflow,
@@ -287,14 +288,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       dispatchedThisTxn += dispatchQty
 
       // Shared with delivery-note finalize (Track A3) so both outbound paths
-      // apply identical stock-commit rules.
-      await commitDoLineStockFifo(dbClient, {
+      // apply identical stock-commit rules. The DO's allocation rule decides the
+      // order stock is taken in; before Track D this was always FIFO regardless
+      // of what the order asked for.
+      await commitDoLineStock(dbClient, {
         companyId: session.companyId,
         warehouseId: Number(doHeader.warehouse_id),
         clientId: Number(doHeader.client_id),
         itemId,
         doLineItemId: Number(line.id),
         quantity: dispatchQty,
+        allocationRule: normalizeAllocationRule(doHeader.allocation_rule),
       })
     }
 

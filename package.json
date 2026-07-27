@@ -34,7 +34,8 @@
     "test:e2e:web-mobile": "node ./scripts/e2e-web-mobile-smoke.mjs",
     "test:outbound-tail": "node scripts/db/run-with-env.mjs tests/outbound-tail.mjs",
     "test:documents": "node scripts/db/run-with-env.mjs tests/documents.mjs",
-    "test:cycle-count": "node scripts/db/run-with-env.mjs tests/cycle-count.mjs"
+    "test:cycle-count": "node scripts/db/run-with-env.mjs tests/cycle-count.mjs",
+    "test:allocation": "node scripts/db/run-with-env.mjs tests/allocation.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

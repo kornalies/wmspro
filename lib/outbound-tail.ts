@@ -30,6 +30,8 @@ export type LockedDO = {
   status: DOStatus
   warehouseId: number
   clientId: number
+  /** Raw column value; normalize through lib/allocation before using it. */
+  allocationRule: string | null
 }
 
 /** Resolve a DO by numeric id or do_number, lock it, and normalize its status. */
@@ -46,7 +48,7 @@ export async function lockDO(
   }
 
   const result = await db.query(
-    `SELECT id, do_number, status, warehouse_id, client_id
+    `SELECT id, do_number, status, warehouse_id, client_id, allocation_rule
      FROM do_header
      WHERE company_id = $1
        AND (
@@ -75,6 +77,9 @@ export async function lockDO(
     status,
     warehouseId: Number(row.warehouse_id),
     clientId: Number(row.client_id),
+    allocationRule: row.allocation_rule === null || row.allocation_rule === undefined
+      ? null
+      : String(row.allocation_rule),
   }
 }
 
