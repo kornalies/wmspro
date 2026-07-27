@@ -108,7 +108,18 @@ const zoneLayoutDDL = [
   // Link each bin layout to its canonical warehouse_zones row so the movement
   // ledger (stock_movements.to_zone_id) never has to string-match zone_code.
   "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS warehouse_zone_id INTEGER REFERENCES warehouse_zones(id)",
-  "CREATE UNIQUE INDEX IF NOT EXISTS uq_zone_layout_wh_zone_rack_bin ON warehouse_zone_layouts (company_id, warehouse_id, zone_code, rack_code, bin_code)",
+  // NOTE: this previously declared a FIVE-column index including company_id, but
+  // existing databases carry a FOUR-column one of the same name. IF NOT EXISTS
+  // matches on name, so the wider definition was never applied and the two had
+  // silently diverged.
+  //
+  // Aligned to what actually exists rather than "corrected", because the
+  // four-column index is not a tenant-isolation hole: warehouse_id is globally
+  // unique and a warehouse belongs to exactly one company, so uniqueness is
+  // already company-scoped in practice. Recreating it would mean dropping a live
+  // unique constraint to gain nothing. What matters is that ON CONFLICT clauses
+  // name the FOUR columns the real index has — naming five would not match it.
+  "CREATE UNIQUE INDEX IF NOT EXISTS uq_zone_layout_wh_zone_rack_bin ON warehouse_zone_layouts (warehouse_id, zone_code, rack_code, bin_code)",
   "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_active ON warehouse_zone_layouts (warehouse_id, is_active)",
   "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_zone ON warehouse_zone_layouts (warehouse_zone_id)",
 ]
