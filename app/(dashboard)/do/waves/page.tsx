@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
-import { Loader2, PlayCircle, Plus, Send, ShieldCheck, UserPlus } from "lucide-react"
+import { FileText, Loader2, PlayCircle, Plus, Send, ShieldCheck, UserPlus } from "lucide-react"
 
 import { apiClient } from "@/lib/api-client"
 import {
@@ -374,6 +374,17 @@ export default function DOWavesPage() {
                       Release
                     </Button>
                   ) : null}
+                  <Button
+                    asChild
+                    size="sm"
+                    variant="ghost"
+                    title="Print pick list"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Link href={`/documents/pick-list/${wave.id}?back=/do/waves`}>
+                      <FileText className="h-4 w-4" />
+                    </Link>
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
