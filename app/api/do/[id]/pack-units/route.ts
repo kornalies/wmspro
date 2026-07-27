@@ -56,6 +56,11 @@ export async function GET(_: NextRequest, context: RouteContext) {
     requirePolicyPermission(policy, "do.manage")
 
     const { id } = await context.params
+    // setTenantContext sets app.company_id with is_local = true, so it survives
+    // only to the end of the current transaction. Without this BEGIN the setting
+    // reverted after its own statement, RLS filtered every following query to
+    // zero rows, and this route answered 404 for delivery orders that exist.
+    await db.query("BEGIN")
     await setTenantContext(db, session.companyId)
     const doRow = await lockDO(db, session.companyId, id)
     requireScope(policy, "warehouse", doRow.warehouseId)
@@ -77,8 +82,10 @@ export async function GET(_: NextRequest, context: RouteContext) {
       [session.companyId, doRow.id]
     )
 
+    await db.query("COMMIT")
     return ok({ do_id: doRow.id, do_number: doRow.doNumber, pack_units: units.rows })
   } catch (error: unknown) {
+    await db.query("ROLLBACK")
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
     if (error instanceof OutboundTailError) return fail(error.code, error.message, error.status)

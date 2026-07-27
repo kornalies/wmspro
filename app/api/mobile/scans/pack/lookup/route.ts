@@ -29,6 +29,11 @@ export async function POST(request: NextRequest) {
     requirePermission(session, "do.manage")
 
     const payload = lookupSchema.parse(await request.json())
+    // setTenantContext sets app.company_id with is_local = true, so it lasts only
+    // to the end of the current transaction. Without this BEGIN it reverted after
+    // its own statement, RLS filtered both lookups to zero rows, and every scan
+    // came back NOT_FOUND regardless of the barcode.
+    await db.query("BEGIN")
     await setTenantContext(db, session.companyId)
 
     const packUnit = await db.query(
@@ -53,6 +58,7 @@ export async function POST(request: NextRequest) {
       const row = packUnit.rows[0]
       const isIssued = row.is_issued === true
       const isLoaded = row.is_loaded === true
+      await db.query("COMMIT")
       return ok({
         match: "PACK_UNIT",
         pack_unit: row,
@@ -83,6 +89,7 @@ export async function POST(request: NextRequest) {
       const row = serial.rows[0]
       const status = String(row.status)
       const alreadyPacked = row.pack_unit_id != null
+      await db.query("COMMIT")
       return ok({
         match: "SERIAL",
         serial: row,
@@ -91,8 +98,10 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    await db.query("COMMIT")
     return fail("NOT_FOUND", `No pack unit or serial matches barcode ${payload.barcode}`, 404)
   } catch (error: unknown) {
+    await db.query("ROLLBACK")
     const message = error instanceof Error ? error.message : "Barcode lookup failed"
     return fail("SCAN_LOOKUP_FAILED", message, 400)
   } finally {
