@@ -75,18 +75,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
     requireScope(policy, "warehouse", doHeader.warehouse_id)
     requireScope(policy, "client", doHeader.client_id)
 
-    if (currentStatus === "CANCELLED") {
-      await db.query("ROLLBACK")
-      return ok(
-        {
-          id: doId,
-          status: "CANCELLED",
-          restored_stock_count: 0,
-          voided_billing_tx_count: 0,
-        },
-        "DO is already cancelled"
-      )
-    }
+    // An already-cancelled DO is not short-circuited. Every step below is
+    // written to be a no-op when there is nothing left to undo, and DOs reversed
+    // before the tail unwind existed still have live pack units and delivery
+    // notes hanging off them. Re-running the reversal is how those get cleaned
+    // up; returning early here would leave them stranded with no way back.
+    const alreadyCancelled = currentStatus === "CANCELLED"
 
     const billedRes = await db.query(
       `SELECT DISTINCT
@@ -158,6 +152,87 @@ export async function POST(request: NextRequest, context: RouteContext) {
       [session.companyId, doId]
     )
 
+    // Unwind the outbound tail as well. Restoring the stock without this left a
+    // cancelled DO carrying a delivery note that still read COMPLETED, and left
+    // its serials sitting inside pack units: the packable pool excludes anything
+    // with a do_pack_unit_serials row regardless of the parent DO's status, so
+    // reversal handed the units back to inventory and then hid them from the one
+    // screen that packs them. The legacy dispatch path ignores pack units and
+    // would still allocate the same serials, so the two disagreed about what was
+    // available.
+    //
+    // The serial links are deleted rather than flagged, matching the pack-unit
+    // void endpoint: every consumer derives availability from that table, so
+    // removing the rows releases the stock everywhere at once. The pack unit,
+    // goods issue, load and delivery note rows all survive as CANCELLED, so the
+    // reversal stays auditable.
+    const releasedFromPackUnits = await db.query(
+      `DELETE FROM do_pack_unit_serials pus
+       USING do_pack_units u
+       WHERE pus.company_id = $1
+         AND u.id = pus.pack_unit_id
+         AND u.company_id = pus.company_id
+         AND u.do_header_id = $2
+       RETURNING pus.serial_id`,
+      [session.companyId, doId]
+    )
+    const releasedPackedSerialCount = releasedFromPackUnits.rowCount || 0
+
+    const voidedPackUnits = await db.query(
+      `UPDATE do_pack_units
+       SET status = 'CANCELLED',
+           total_quantity = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $1
+         AND do_header_id = $2
+         AND status <> 'CANCELLED'
+       RETURNING id`,
+      [session.companyId, doId]
+    )
+
+    const cancelledNotes = await db.query(
+      `UPDATE delivery_note_header
+       SET status = 'CANCELLED',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $1
+         AND do_header_id = $2
+         AND status <> 'CANCELLED'
+       RETURNING id`,
+      [session.companyId, doId]
+    )
+
+    const cancelledLoads = await db.query(
+      `UPDATE outbound_loads
+       SET status = 'CANCELLED',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $1
+         AND do_header_id = $2
+         AND status <> 'CANCELLED'
+       RETURNING id`,
+      [session.companyId, doId]
+    )
+
+    const cancelledIssues = await db.query(
+      `UPDATE goods_issue_header
+       SET status = 'CANCELLED',
+           cancelled_at = CURRENT_TIMESTAMP,
+           cancelled_by = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $2
+         AND do_header_id = $3
+         AND status <> 'CANCELLED'
+       RETURNING id`,
+      [session.userId ?? null, session.companyId, doId]
+    )
+
+    const tailUnwind = {
+      released_packed_serial_count: releasedPackedSerialCount,
+      voided_pack_unit_count: voidedPackUnits.rowCount || 0,
+      cancelled_goods_issue_count: cancelledIssues.rowCount || 0,
+      cancelled_load_count: cancelledLoads.rowCount || 0,
+      cancelled_delivery_note_count: cancelledNotes.rowCount || 0,
+    }
+
     const voidBillingRes = await db.query(
       `UPDATE billing_transactions
        SET status = 'VOID',
@@ -216,6 +291,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           restored_stock_count: restoredStockCount,
           voided_billing_tx_count: voidedBillingCount,
           removed_ledger_entry_count: removedLedgerEntryCount,
+          ...tailUnwind,
           reason: payload.reason || null,
         },
         req: request,
@@ -231,8 +307,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
         restored_stock_count: restoredStockCount,
         voided_billing_tx_count: voidedBillingCount,
         removed_ledger_entry_count: removedLedgerEntryCount,
+        ...tailUnwind,
       },
-      "DO reversed successfully"
+      alreadyCancelled
+        ? `DO was already cancelled. Cleaned up ${releasedPackedSerialCount} stranded serial(s) and ${tailUnwind.voided_pack_unit_count} pack unit(s).`
+        : `DO reversed successfully. ${restoredStockCount + releasedPackedSerialCount} serial(s) returned to stock, ${tailUnwind.voided_pack_unit_count} pack unit(s) voided.`
     )
   } catch (error: unknown) {
     await db.query("ROLLBACK")

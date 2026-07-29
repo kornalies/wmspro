@@ -7,6 +7,7 @@ import { fail, ok } from "@/lib/api-response"
 import { writeAudit } from "@/lib/audit"
 import {
   DO_WORKFLOW_STATUSES,
+  canTransitionDOStatus,
   getDOStatusErrorMessage,
   isDOWorkflowStatus,
   normalizeDOStatus,
@@ -96,18 +97,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return fail("WORKFLOW_BLOCKED", `Cannot update workflow for ${currentStatus} DO`, 409)
     }
 
-    if (normalizedRequestedStatus === "PICKED") {
-      if (!["DRAFT", "PENDING", "PICKED"].includes(currentStatus)) {
-        await dbClient.query("ROLLBACK")
-        return fail("WORKFLOW_BLOCKED", `Cannot mark PICKED from status ${currentStatus}`, 409)
-      }
-    }
-
-    if (normalizedRequestedStatus === "STAGED") {
-      if (!["PICKED", "STAGED"].includes(currentStatus)) {
-        await dbClient.query("ROLLBACK")
-        return fail("WORKFLOW_BLOCKED", `Cannot mark STAGED from status ${currentStatus}`, 409)
-      }
+    if (!canTransitionDOStatus(currentStatus, normalizedRequestedStatus)) {
+      await dbClient.query("ROLLBACK")
+      return fail(
+        "WORKFLOW_BLOCKED",
+        `Cannot mark ${normalizedRequestedStatus} from status ${currentStatus}`,
+        409
+      )
     }
 
     const nextStatus = normalizedRequestedStatus

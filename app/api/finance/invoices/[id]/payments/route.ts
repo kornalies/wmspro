@@ -173,8 +173,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
     try {
       await syncFinanceLedger(session.companyId, session.userId, { kind: "invoice", invoiceId })
     } catch (ledgerError) {
-      // Payment write is committed; ledger sync retry can run asynchronously.
+      // The payment itself is committed; the ledger self-heals on the next full recompute that the
+      // finance report/read routes run. Persist a FAILED marker so the transient drift is visible
+      // and re-syncable instead of vanishing into a log line.
       console.error("invoice payment ledger sync failed:", ledgerError)
+      try {
+        await db.query("BEGIN")
+        await setTenantContext(db, session.companyId)
+        await db.query(
+          `INSERT INTO billing_job_runs (company_id, job_type, run_key, status, finished_at, details, created_by)
+           VALUES ($1, 'LEDGER_SYNC', $2, 'FAILED', CURRENT_TIMESTAMP, $3::jsonb, $4)
+           ON CONFLICT (company_id, job_type, run_key)
+           DO UPDATE SET status = 'FAILED', finished_at = CURRENT_TIMESTAMP, details = EXCLUDED.details`,
+          [
+            session.companyId,
+            `LEDGER-SYNC-FAIL-INV-${invoiceId}`,
+            JSON.stringify({
+              invoiceId,
+              scope: "invoice",
+              trigger: "payment",
+              error: ledgerError instanceof Error ? ledgerError.message : String(ledgerError),
+              at: new Date().toISOString(),
+            }),
+            session.userId,
+          ]
+        )
+        await db.query("COMMIT")
+      } catch (markerError) {
+        await db.query("ROLLBACK")
+        console.error("failed to persist ledger sync failure marker:", markerError)
+      }
     }
 
     const responseBody = {

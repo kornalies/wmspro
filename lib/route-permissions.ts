@@ -36,7 +36,15 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   { href: "/grn/mobile-approvals", permissions: ["grn.mobile.approve"] },
   { href: "/grn", permissions: ["grn.manage"] },
   { href: "/do", permissions: ["do.manage"] },
+  // Printable documents (lib/documents) are all outbound paperwork, so they ride
+  // on the same permission as the delivery orders they describe. The API enforces
+  // this independently; this stops the page rendering a shell to someone whose
+  // fetch behind it will only ever 401.
+  { href: "/documents", permissions: ["do.manage"] },
   { href: "/stock/transfer", permissions: ["stock.putaway.manage"] },
+  // Approving a variance writes stock off, so it needs the same permission as
+  // any other stock mutation rather than a read-only stock role.
+  { href: "/stock/cycle-counts", permissions: ["stock.putaway.manage"] },
   { href: "/gate/in", permissions: ["gate.in.create"] },
   { href: "/gate/out", permissions: ["gate.out.create"] },
   { href: "/admin/onboarding", permissions: ["master.data.manage", "admin.users.manage", "admin.companies.manage"] },
@@ -66,6 +74,7 @@ const WMS_PREFIXES = [
   "/dashboard",
   "/grn",
   "/do",
+  "/documents",
   "/stock",
   "/gate",
   "/admin",

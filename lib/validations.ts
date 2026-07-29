@@ -78,6 +78,9 @@ export const doHeaderSchema = z.object({
   machine_from_time: z.string().optional(),
   machine_to_time: z.string().optional(),
   outward_remarks: z.string().optional(),
+  // How stock is chosen for this order. Persisted rather than folded into the
+  // remarks text, so lib/allocation.ts can actually honour it.
+  allocation_rule: z.enum(["FIFO", "FEFO", "BATCH", "SERIAL", "LOCATION"]).optional(),
   total_items: z.number().min(1),
   total_quantity_requested: z.number().int().min(1),
 })

@@ -108,7 +108,18 @@ const zoneLayoutDDL = [
   // Link each bin layout to its canonical warehouse_zones row so the movement
   // ledger (stock_movements.to_zone_id) never has to string-match zone_code.
   "ALTER TABLE warehouse_zone_layouts ADD COLUMN IF NOT EXISTS warehouse_zone_id INTEGER REFERENCES warehouse_zones(id)",
-  "CREATE UNIQUE INDEX IF NOT EXISTS uq_zone_layout_wh_zone_rack_bin ON warehouse_zone_layouts (company_id, warehouse_id, zone_code, rack_code, bin_code)",
+  // NOTE: this previously declared a FIVE-column index including company_id, but
+  // existing databases carry a FOUR-column one of the same name. IF NOT EXISTS
+  // matches on name, so the wider definition was never applied and the two had
+  // silently diverged.
+  //
+  // Aligned to what actually exists rather than "corrected", because the
+  // four-column index is not a tenant-isolation hole: warehouse_id is globally
+  // unique and a warehouse belongs to exactly one company, so uniqueness is
+  // already company-scoped in practice. Recreating it would mean dropping a live
+  // unique constraint to gain nothing. What matters is that ON CONFLICT clauses
+  // name the FOUR columns the real index has — naming five would not match it.
+  "CREATE UNIQUE INDEX IF NOT EXISTS uq_zone_layout_wh_zone_rack_bin ON warehouse_zone_layouts (warehouse_id, zone_code, rack_code, bin_code)",
   "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_active ON warehouse_zone_layouts (warehouse_id, is_active)",
   "CREATE INDEX IF NOT EXISTS idx_zone_layout_warehouse_zone ON warehouse_zone_layouts (warehouse_zone_id)",
 ]
@@ -218,6 +229,41 @@ const accountingDDL = [
   "CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_lines_entry_line_no ON journal_lines(journal_entry_id, line_no)",
 ]
 
+/**
+ * Run one bootstrap statement without letting a failure poison an enclosing
+ * transaction.
+ *
+ * Swallowing an insufficient-privilege error is not enough on its own: the
+ * failed statement has already put the caller's transaction into the aborted
+ * state, so every subsequent command returns "current transaction is aborted"
+ * and the real work fails with an error that points nowhere near the cause.
+ * A SAVEPOINT scopes the failure to the one statement.
+ *
+ * SAVEPOINT is only legal inside a transaction block. Callers that pass a
+ * pooled client outside one fall back to running the statement bare, where an
+ * error has nothing to poison anyway.
+ */
+async function runOneStatement(statement: string, db: DBClient) {
+  let savepointHeld = false
+  try {
+    await db.query("SAVEPOINT wms_bootstrap_stmt")
+    savepointHeld = true
+  } catch {
+    // Not inside a transaction — nothing to protect.
+  }
+
+  try {
+    await db.query(statement)
+    if (savepointHeld) await db.query("RELEASE SAVEPOINT wms_bootstrap_stmt")
+  } catch (error) {
+    if (savepointHeld) {
+      await db.query("ROLLBACK TO SAVEPOINT wms_bootstrap_stmt")
+      await db.query("RELEASE SAVEPOINT wms_bootstrap_stmt")
+    }
+    throw error
+  }
+}
+
 async function runStatements(
   statements: string[],
   db?: DBClient
@@ -228,7 +274,7 @@ async function runStatements(
   for (const statement of statements) {
     try {
       if (db) {
-        await db.query(statement)
+        await runOneStatement(statement, db)
       } else {
         await query(statement)
       }

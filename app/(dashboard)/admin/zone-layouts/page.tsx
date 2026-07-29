@@ -57,6 +57,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import LocationGenerator from "@/components/admin/LocationGenerator"
 
 type ZoneLayoutRow = {
   id: number
@@ -535,6 +536,7 @@ export default function ZoneLayoutsPage() {
           <Button variant="outline" onClick={openBulk}>
             <Rows3 className="mr-2 h-4 w-4" /> Add Rack
           </Button>
+          <LocationGenerator warehouses={warehouses} onGenerated={() => queryClient.invalidateQueries({ queryKey: ["admin", "zone-layouts"] })} />
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate}>

@@ -9,6 +9,7 @@ import { canAccessPath } from '@/lib/route-permissions'
 import {
     LayoutDashboard,
     Bell,
+    ClipboardList,
     PackagePlus,
     PackageMinus,
     Search,
@@ -121,6 +122,12 @@ const sections: SidebarSection[] = [
                 icon: ArrowLeftRight,
                 href: '/stock/transfer',
                 color: 'text-amber-500',
+            },
+            {
+                label: 'Cycle Counts',
+                icon: ClipboardList,
+                href: '/stock/cycle-counts',
+                color: 'text-emerald-400',
             },
             {
                 label: 'Stock Movements',

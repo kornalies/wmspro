@@ -203,14 +203,14 @@ export async function POST(request: NextRequest) {
         dispatch_date, supplier_name, invoice_no, invoice_date, model_no, serial_no,
         material_description, date_of_manufacturing, basic_price, invoice_qty, dispatched_qty,
         quantity_difference, no_of_cases, no_of_pallets, weight_kg, handling_type,
-        machine_type, machine_from_time, machine_to_time, outward_remarks,
+        machine_type, machine_from_time, machine_to_time, outward_remarks, allocation_rule,
         total_items, total_quantity_requested, total_quantity_dispatched, status, created_by
       ) VALUES (
         $1, $2, CURRENT_DATE, $3, $4, $5, $6,
         $7::date, $8, $9, $10::date, $11, $12,
         $13, $14::date, $15, $16, $17, $18, $19, $20, $21, $22,
-        $23, $24::timestamp, $25::timestamp, $26,
-        $27, $28, 0, 'DRAFT', $29
+        $23, $24::timestamp, $25::timestamp, $26, $27,
+        $28, $29, 0, 'DRAFT', $30
       )
       RETURNING *`,
       [
@@ -240,6 +240,7 @@ export async function POST(request: NextRequest) {
         header.machine_from_time || null,
         header.machine_to_time || null,
         header.outward_remarks || null,
+        header.allocation_rule || 'FIFO',
         header.total_items,
         header.total_quantity_requested,
         session.userId,

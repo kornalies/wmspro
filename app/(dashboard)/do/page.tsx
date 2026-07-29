@@ -19,6 +19,7 @@ import {
   Search,
   Settings2,
   Ship,
+  Truck,
   XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -380,7 +381,10 @@ export default function DOPage() {
       DRAFT: "border-blue-200 bg-blue-50 text-blue-800",
       PENDING: "border-cyan-200 bg-cyan-50 text-cyan-800",
       PICKED: "border-indigo-200 bg-indigo-50 text-indigo-800",
+      PACKED: "border-purple-200 bg-purple-50 text-purple-800",
       STAGED: "border-violet-200 bg-violet-50 text-violet-800",
+      ISSUED: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
+      LOADED: "border-teal-200 bg-teal-50 text-teal-800",
       PARTIALLY_FULFILLED: "border-amber-200 bg-amber-50 text-amber-800",
       COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-800",
       CANCELLED: "border-rose-200 bg-rose-50 text-rose-800",
@@ -756,15 +760,20 @@ function RowActions({
           <Eye className="h-4 w-4" />
         </Link>
       </Button>
+      <Button asChild variant="ghost" size="icon-sm" title="Outbound tail" aria-label={`Open outbound tail for ${row.do_number}`}>
+        <Link href={`/do/${encodeURIComponent(row.do_number)}/outbound`}>
+          <Truck className="h-4 w-4 text-slate-700 dark:text-slate-300" />
+        </Link>
+      </Button>
       <Button asChild variant="ghost" size="icon-sm" title="Print dispatch note" aria-label={`Print dispatch note for ${row.do_number}`}>
-        <a href={`/api/do/${encodeURIComponent(row.do_number)}/download?profile=dispatch_note`} target="_blank" rel="noopener noreferrer">
+        <Link href={`/documents/dispatch-note/${row.id}?back=/do`}>
           <Printer className="h-4 w-4 text-slate-700 dark:text-slate-300" />
-        </a>
+        </Link>
       </Button>
       <Button asChild variant="ghost" size="icon-sm" title="Print packing slip" aria-label={`Print packing slip for ${row.do_number}`}>
-        <a href={`/api/do/${encodeURIComponent(row.do_number)}/download?profile=packing_slip`} target="_blank" rel="noopener noreferrer">
+        <Link href={`/documents/packing-slip/${row.id}?back=/do`}>
           <FileText className="h-4 w-4 text-indigo-700 dark:text-indigo-300" />
-        </a>
+        </Link>
       </Button>
       {(row.status === "STAGED" || row.status === "PARTIALLY_FULFILLED") ? (
         <Button variant="ghost" size="icon-sm" className="text-blue-600" title="Record dispatch" aria-label={`Record dispatch for ${row.do_number}`} onClick={onFulfill}>

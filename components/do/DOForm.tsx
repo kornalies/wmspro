@@ -410,7 +410,9 @@ export function DOForm() {
       const operationalNotes = [
         data.delivery_type !== "CUSTOMER_DELIVERY" ? `Delivery type: ${data.delivery_type}` : "",
         data.priority !== "NORMAL" ? `Priority: ${data.priority}` : "",
-        data.allocation_rule !== "FIFO" ? `Allocation rule: ${data.allocation_rule}` : "",
+        // allocation_rule is a real column now and is sent on the header below.
+        // It used to be flattened into this notes string, which meant choosing
+        // FEFO changed nothing about how stock was actually allocated.
         data.carrier_name ? `Carrier: ${data.carrier_name}` : "",
         data.vehicle_no ? `Vehicle: ${data.vehicle_no}` : "",
         data.dispatch_slot ? `Slot: ${data.dispatch_slot}` : "",
@@ -450,6 +452,7 @@ export function DOForm() {
           machine_from_time: data.handling_type === "MACHINE" && data.machine_from_time ? new Date(data.machine_from_time).toISOString() : undefined,
           machine_to_time: data.handling_type === "MACHINE" && data.machine_to_time ? new Date(data.machine_to_time).toISOString() : undefined,
           outward_remarks: operationalNotes.join(" | ") || undefined,
+          allocation_rule: data.allocation_rule,
           total_items: data.lineItems.length,
           total_quantity_requested: data.lineItems.reduce((sum, item) => sum + item.quantity_requested, 0),
         },

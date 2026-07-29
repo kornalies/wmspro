@@ -5,8 +5,11 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { getClient, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { stageChargeTransaction } from "@/lib/billing-service"
+import { getOutboundBillingTrigger } from "@/lib/company-settings"
 import { writeAudit } from "@/lib/audit"
 import { getDOStatusErrorMessage, isDOStatus, normalizeDOStatus } from "@/lib/do-status"
+import { OutboundStockError, commitDoLineStock } from "@/lib/outbound-stock"
+import { normalizeAllocationRule } from "@/lib/allocation"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
   enforceWorkflow,
@@ -284,53 +287,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
       hasDispatchedAnyLine = true
       dispatchedThisTxn += dispatchQty
 
-      const stockRows = await dbClient.query(
-        `SELECT id
-         FROM stock_serial_numbers
-         WHERE warehouse_id = $1
-           AND client_id = $2
-           AND item_id = $3
-           AND company_id = $4
-           AND (
-             (status = 'RESERVED' AND do_line_item_id = $5)
-             OR (status = 'IN_STOCK' AND do_line_item_id IS NULL)
-           )
-         ORDER BY
-           CASE WHEN status = 'RESERVED' THEN 0 ELSE 1 END,
-           received_date ASC,
-           id ASC
-         LIMIT $6
-         FOR UPDATE SKIP LOCKED`,
-        [doHeader.warehouse_id, doHeader.client_id, itemId, session.companyId, line.id, dispatchQty]
-      )
-
-      const stockIds = stockRows.rows.map((stock: { id: number }) => Number(stock.id)).filter(Boolean)
-      if (stockIds.length < dispatchQty) {
-        await dbClient.query("ROLLBACK")
-        return fail(
-          "INVENTORY_VALIDATION_FAILED",
-          `Insufficient inventory for item ${itemId}. Required ${dispatchQty}, available ${stockIds.length}.`,
-          409
-        )
-      }
-
-      await dbClient.query(
-        `UPDATE do_line_items
-         SET quantity_dispatched = quantity_dispatched + $1
-         WHERE id = $2
-           AND company_id = $3`,
-        [dispatchQty, line.id, session.companyId]
-      )
-
-      await dbClient.query(
-        `UPDATE stock_serial_numbers
-         SET status = 'DISPATCHED',
-             do_line_item_id = $1,
-             dispatched_date = CURRENT_DATE
-         WHERE company_id = $2
-           AND id = ANY($3::int[])`,
-        [line.id, session.companyId, stockIds]
-      )
+      // Shared with delivery-note finalize (Track A3) so both outbound paths
+      // apply identical stock-commit rules. The DO's allocation rule decides the
+      // order stock is taken in; before Track D this was always FIFO regardless
+      // of what the order asked for.
+      await commitDoLineStock(dbClient, {
+        companyId: session.companyId,
+        warehouseId: Number(doHeader.warehouse_id),
+        clientId: Number(doHeader.client_id),
+        itemId,
+        doLineItemId: Number(line.id),
+        quantity: dispatchQty,
+        allocationRule: normalizeAllocationRule(doHeader.allocation_rule),
+      })
     }
 
     const totals = await dbClient.query(
@@ -435,7 +404,25 @@ export async function POST(request: NextRequest, context: RouteContext) {
       ]
     )
 
-    if (dispatchedThisTxn > 0) {
+    // A5: OUTBOUND_HANDLING must stage exactly once per DO, whichever path
+    // fulfils it. A tenant on the GOODS_ISSUE trigger has already been billed by
+    // the goods issue document, so staging again here would double-bill.
+    const billingTrigger = await getOutboundBillingTrigger(dbClient, session.companyId)
+    let alreadyStagedByGoodsIssue = false
+    if (billingTrigger === "GOODS_ISSUE") {
+      const existingGi = await dbClient.query(
+        `SELECT 1
+         FROM goods_issue_header
+         WHERE company_id = $1
+           AND do_header_id = $2
+           AND status = 'GENERATED'
+         LIMIT 1`,
+        [session.companyId, doId]
+      )
+      alreadyStagedByGoodsIssue = existingGi.rows.length > 0
+    }
+
+    if (dispatchedThisTxn > 0 && !alreadyStagedByGoodsIssue) {
       const eventDateRaw =
         payload.dispatchDate ||
         (doHeader.dispatch_date ? String(doHeader.dispatch_date).slice(0, 10) : null) ||
@@ -519,6 +506,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
     await dbClient.query("ROLLBACK")
     const guarded = guardToFailResponse(error)
     if (guarded) return guarded
+    // Preserves the pre-refactor contract: insufficient stock is a 409
+    // INVENTORY_VALIDATION_FAILED, not a generic 400.
+    if (error instanceof OutboundStockError) return fail(error.code, error.message, 409)
     const message = error instanceof Error ? error.message : "Failed to dispatch DO"
     return fail("DISPATCH_FAILED", message, 400)
   } finally {
