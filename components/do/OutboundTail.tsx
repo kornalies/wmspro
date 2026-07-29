@@ -23,6 +23,7 @@ import {
   Loader2,
   PackageCheck,
   Truck,
+  Undo2,
 } from "lucide-react"
 
 import api from "@/lib/api"
@@ -150,6 +151,10 @@ export default function OutboundTail({ doRef }: { doRef: string }) {
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
 
+  // Voiding discards packing work, so it takes two clicks. The confirm lives in
+  // the row rather than a modal: the operator needs to see which pack code they
+  // are about to undo while they confirm it.
+  const [confirmVoid, setConfirmVoid] = useState<number | null>(null)
   const [selectedSerials, setSelectedSerials] = useState<number[]>([])
   const [packType, setPackType] = useState("PALLET")
   const [grossWeight, setGrossWeight] = useState("")
@@ -400,22 +405,70 @@ export default function OutboundTail({ doRef }: { doRef: string }) {
                       {unit.is_loaded ? "Loaded" : unit.is_issued ? "Issued" : "In warehouse"}
                     </td>
                     <td className="border px-2 py-1 text-right">
-                      {unit.status === "OPEN" ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy === `close-${unit.id}`}
-                          onClick={() =>
-                            run(
-                              `close-${unit.id}`,
-                              () => api.post(`/do/pack-units/${unit.id}/close`, {}),
-                              `Pack unit ${unit.pack_code} closed.`
-                            )
-                          }
-                        >
-                          Close
-                        </Button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {unit.status === "OPEN" ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy === `close-${unit.id}`}
+                            onClick={() =>
+                              run(
+                                `close-${unit.id}`,
+                                () => api.post(`/do/pack-units/${unit.id}/close`, {}),
+                                `Pack unit ${unit.pack_code} closed.`
+                              )
+                            }
+                          >
+                            Close
+                          </Button>
+                        ) : null}
+
+                        {/* Undoing a mis-scan is only possible while the unit is
+                            still in the warehouse. Once it is on a goods issue
+                            the server refuses, so the button goes with it. */}
+                        {!unit.is_issued && !unit.is_loaded ? (
+                          confirmVoid === unit.id ? (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={busy === `void-${unit.id}`}
+                                onClick={async () => {
+                                  const done = await run(
+                                    `void-${unit.id}`,
+                                    () => api.post(`/do/pack-units/${unit.id}/cancel`, {}),
+                                    `Pack unit ${unit.pack_code} voided. Its serials are available to pack again.`
+                                  )
+                                  if (done) setConfirmVoid(null)
+                                }}
+                              >
+                                {busy === `void-${unit.id}` ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : null}
+                                Confirm void
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={busy === `void-${unit.id}`}
+                                onClick={() => setConfirmVoid(null)}
+                              >
+                                Keep
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-red-600"
+                              onClick={() => setConfirmVoid(unit.id)}
+                            >
+                              <Undo2 className="mr-1 h-3.5 w-3.5" />
+                              Void
+                            </Button>
+                          )
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

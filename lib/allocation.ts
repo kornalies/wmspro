@@ -86,6 +86,30 @@ export function allocatableStockPredicate(alias = "s", itemAlias = "i"): string 
     )`
 }
 
+/**
+ * Predicate limiting stock to what this DO line is actually entitled to take.
+ *
+ * Two disjoint pools, and the distinction is the whole point:
+ *
+ *   RESERVED to this line — allocation already pinned it here via
+ *     stock_serial_numbers.do_line_item_id. Ours.
+ *
+ *   IN_STOCK and unpinned — free stock, available to whoever asks first.
+ *
+ * Stock RESERVED to a *different* line is deliberately excluded. Without that
+ * exclusion an operator on one DO can pack inventory another DO is holding, and
+ * the second order then fails at commit with a shortage it did not cause.
+ *
+ * `lineExpr` is SQL, not a value, so this works both where the line is a bind
+ * parameter (the commit path) and where it is a joined column (the pack pool).
+ */
+export function reservableStockPredicate(alias = "s", lineExpr = "$1"): string {
+  return `(
+    (${alias}.status = 'RESERVED' AND ${alias}.do_line_item_id = ${lineExpr})
+    OR (${alias}.status = 'IN_STOCK' AND ${alias}.do_line_item_id IS NULL)
+  )`
+}
+
 /** Human-readable note for a rule, shown wherever allocation is presented. */
 export function describeAllocationRule(rule: AllocationRule): string {
   switch (rule) {

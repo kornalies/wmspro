@@ -22,9 +22,21 @@ api.interceptors.response.use(
 
     const responseData = error.response?.data
 
+    // Routes fail via lib/api-response.ts, whose envelope nests the text one
+    // level down as { error: { code, message } }. Older/plain responses put a
+    // bare string on `error`, so both shapes have to be unwrapped here — taking
+    // the object as-is is what used to render "[object Object]" to operators.
+    const envelope = responseData?.error
+    const envelopeMessage =
+      typeof envelope === "string"
+        ? envelope
+        : typeof envelope?.message === "string"
+          ? envelope.message
+          : ""
+
     const message =
       (typeof responseData === "string" && responseData) ||
-      responseData?.error ||
+      envelopeMessage ||
       responseData?.message ||
       (Array.isArray(responseData?.errors) &&
         responseData.errors

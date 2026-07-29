@@ -16,6 +16,7 @@ import {
   allocationOrderBy,
   describeAllocationRule,
   normalizeAllocationRule,
+  reservableStockPredicate,
 } from "@/lib/allocation"
 
 /**
@@ -68,6 +69,7 @@ export async function GET(_: NextRequest, context: RouteContext) {
          ON lp.pack_unit_id = u.id AND lp.company_id = u.company_id
        WHERE u.company_id = $1
          AND u.do_header_id = $2
+         AND u.status <> 'CANCELLED'
        ORDER BY u.id ASC`,
       [session.companyId, doRow.id]
     )
@@ -120,28 +122,71 @@ export async function GET(_: NextRequest, context: RouteContext) {
     // this list in order, so an operator packing top-down on a FEFO order packs
     // FEFO; leaving it in id order would have quietly undone the rule at the one
     // step where a human actually chooses the stock.
+    // Two limits, both of which were missing and each of which let the screen
+    // offer stock the order has no claim on:
+    //
+    //   reservableStockPredicate — excludes serials RESERVED to another DO line.
+    //     Matching on item alone offered one order another order's held stock.
+    //
+    //   outstanding — quantity_requested minus what this line has already taken.
+    //     Packed serials and dispatched quantity are the same units counted two
+    //     ways once a delivery note finalizes, so GREATEST (not the sum) is the
+    //     honest figure; the legacy dispatch route moves quantity_dispatched
+    //     without ever creating a pack unit, which is why both are consulted.
+    //
+    // Without the cap the pool was every unit of the item in the building, so a
+    // line for 2 offered 12 and packed 5.
     const rule = normalizeAllocationRule(doRow.allocationRule)
     const packableSerials = await db.query(
-      `SELECT s.id, s.serial_number, s.status, s.bin_location, s.lp_record_id,
-              s.batch_number, s.expiry_date,
-              (s.expiry_date - CURRENT_DATE) AS days_to_expiry,
-              dli.id AS do_line_item_id, dli.line_number,
-              i.item_code, i.item_name
-       FROM do_line_items dli
-       JOIN items i ON i.id = dli.item_id AND i.company_id = dli.company_id
-       JOIN stock_serial_numbers s
-         ON s.company_id = dli.company_id
-        AND s.item_id = dli.item_id
-        AND s.warehouse_id = $3
-        AND s.client_id = $4
-        AND s.status IN ('IN_STOCK', 'RESERVED')
-       LEFT JOIN do_pack_unit_serials pus
-         ON pus.serial_id = s.id AND pus.company_id = s.company_id
-       WHERE dli.company_id = $1
-         AND dli.do_header_id = $2
-         AND pus.id IS NULL
-         AND ${allocatableStockPredicate("s", "i")}
-       ORDER BY dli.line_number ASC, ${allocationOrderBy(rule, "s")}`,
+      `WITH line_taken AS (
+         SELECT dli.id,
+                dli.line_number,
+                dli.item_id,
+                GREATEST(
+                  dli.quantity_requested - GREATEST(
+                    dli.quantity_dispatched,
+                    (SELECT COUNT(*)::int
+                       FROM do_pack_unit_serials pus
+                      WHERE pus.company_id = dli.company_id
+                        AND pus.do_line_item_id = dli.id)
+                  ),
+                  0
+                ) AS outstanding
+           FROM do_line_items dli
+          WHERE dli.company_id = $1
+            AND dli.do_header_id = $2
+       ),
+       ranked AS (
+         SELECT s.id, s.serial_number, s.status, s.bin_location, s.lp_record_id,
+                s.batch_number, s.expiry_date,
+                (s.expiry_date - CURRENT_DATE) AS days_to_expiry,
+                l.id AS do_line_item_id, l.line_number,
+                i.item_code, i.item_name,
+                l.outstanding,
+                ROW_NUMBER() OVER (
+                  PARTITION BY l.id
+                  ORDER BY ${allocationOrderBy(rule, "s")}
+                ) AS rn
+           FROM line_taken l
+           JOIN items i ON i.id = l.item_id AND i.company_id = $1
+           JOIN stock_serial_numbers s
+             ON s.company_id = $1
+            AND s.item_id = l.item_id
+            AND s.warehouse_id = $3
+            AND s.client_id = $4
+            AND ${reservableStockPredicate("s", "l.id")}
+           LEFT JOIN do_pack_unit_serials pus
+             ON pus.serial_id = s.id AND pus.company_id = s.company_id
+          WHERE pus.id IS NULL
+            AND l.outstanding > 0
+            AND ${allocatableStockPredicate("s", "i")}
+       )
+       SELECT id, serial_number, status, bin_location, lp_record_id,
+              batch_number, expiry_date, days_to_expiry,
+              do_line_item_id, line_number, item_code, item_name
+         FROM ranked
+        WHERE rn <= outstanding
+        ORDER BY line_number ASC, rn ASC`,
       [session.companyId, doRow.id, doRow.warehouseId, doRow.clientId]
     )
 

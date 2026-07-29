@@ -125,11 +125,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
     // real, belongs to that line's item, and is still in the building.
     const lineIds = payload.lines.map((line) => line.do_line_item_id)
     const lineRows = await db.query(
-      `SELECT id, item_id
-       FROM do_line_items
-       WHERE company_id = $1
-         AND do_header_id = $2
-         AND id = ANY($3::int[])`,
+      `SELECT dli.id,
+              dli.item_id,
+              dli.line_number,
+              GREATEST(
+                dli.quantity_requested - GREATEST(
+                  dli.quantity_dispatched,
+                  (SELECT COUNT(*)::int
+                     FROM do_pack_unit_serials pus
+                    WHERE pus.company_id = dli.company_id
+                      AND pus.do_line_item_id = dli.id)
+                ),
+                0
+              ) AS outstanding
+       FROM do_line_items dli
+       WHERE dli.company_id = $1
+         AND dli.do_header_id = $2
+         AND dli.id = ANY($3::int[])`,
       [session.companyId, doRow.id, lineIds]
     )
     if (lineRows.rows.length !== new Set(lineIds).size) {
@@ -142,6 +154,35 @@ export async function POST(request: NextRequest, context: RouteContext) {
         Number(row.item_id),
       ])
     )
+    const outstandingByLine = new Map<number, number>(
+      lineRows.rows.map((row: { id: unknown; outstanding: unknown }) => [
+        Number(row.id),
+        Number(row.outstanding),
+      ])
+    )
+    const lineNumberByLine = new Map<number, number>(
+      lineRows.rows.map((row: { id: unknown; line_number: unknown }) => [
+        Number(row.id),
+        Number(row.line_number),
+      ])
+    )
+
+    // Never pack more than the line still owes. The pack pool in the tail read
+    // enforces the same ceiling, but the UI is not the authority: without this
+    // the endpoint would happily ship five units against an order for two.
+    for (const line of payload.lines) {
+      const outstanding = outstandingByLine.get(line.do_line_item_id) ?? 0
+      if (line.serial_ids.length > outstanding) {
+        await db.query("ROLLBACK")
+        return fail(
+          "WORKFLOW_BLOCKED",
+          outstanding === 0
+            ? `DO line ${lineNumberByLine.get(line.do_line_item_id)} is already fully packed.`
+            : `DO line ${lineNumberByLine.get(line.do_line_item_id)} has ${outstanding} unit(s) outstanding but ${line.serial_ids.length} serial(s) were submitted.`,
+          409
+        )
+      }
+    }
 
     const allSerialIds = payload.lines.flatMap((line) => line.serial_ids)
     if (new Set(allSerialIds).size !== allSerialIds.length) {
@@ -150,7 +191,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     const serialRows = await db.query(
-      `SELECT id, item_id, status
+      `SELECT id, item_id, status, do_line_item_id
        FROM stock_serial_numbers
        WHERE company_id = $1
          AND id = ANY($2::int[])
@@ -167,7 +208,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
         400
       )
     }
-    type SerialRow = { id: unknown; item_id: unknown; status: unknown }
+    type SerialRow = {
+      id: unknown
+      item_id: unknown
+      status: unknown
+      do_line_item_id: unknown
+    }
     const serialById = new Map<number, SerialRow>(
       serialRows.rows.map((row: SerialRow) => [Number(row.id), row])
     )
@@ -189,6 +235,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
           return fail(
             "WORKFLOW_BLOCKED",
             `Serial ${serialId} is ${status} and cannot be packed`,
+            409
+          )
+        }
+        // Free stock is unpinned; RESERVED stock may only be packed by the line
+        // that holds it. Packing another line's reservation leaves that order
+        // short at commit time through no fault of its own.
+        const pinnedTo =
+          serial?.do_line_item_id == null ? null : Number(serial.do_line_item_id)
+        if (status === "RESERVED" && pinnedTo !== line.do_line_item_id) {
+          await db.query("ROLLBACK")
+          return fail(
+            "WORKFLOW_BLOCKED",
+            `Serial ${serialId} is reserved for another delivery order line and cannot be packed here`,
             409
           )
         }
