@@ -19,6 +19,8 @@ import {
   nextDocumentNumber,
   setDOStatus,
 } from "@/lib/outbound-tail"
+import { getOutboundPathClaim, outboundPathConflictMessage } from "@/lib/outbound-path"
+import { allocatableStockPredicate } from "@/lib/allocation"
 
 type RouteContext = {
   params: Promise<{ id: string }>
@@ -121,6 +123,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
     requireScope(policy, "client", doRow.clientId)
     assertDOStatusIn(doRow, ["PICKED", "PACKED"], "build a pack unit for")
 
+    // Entry point to the whole tail: goods issue, loads and the delivery note all
+    // refuse to run without closed pack units, so blocking here blocks the tail.
+    // An order already dispatched directly cannot enter it -- see
+    // lib/outbound-path.ts for why mixing the two corrupts the order's billing.
+    const claim = await getOutboundPathClaim(db, session.companyId, doRow.id)
+    if (claim?.path === "DISPATCH") {
+      await db.query("ROLLBACK")
+      return fail("OUTBOUND_PATH_CONFLICT", outboundPathConflictMessage(claim, "TAIL"), 409)
+    }
+
     // Validate every referenced line belongs to this DO, and every serial is
     // real, belongs to that line's item, and is still in the building.
     const lineIds = payload.lines.map((line) => line.do_line_item_id)
@@ -190,14 +202,25 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return fail("VALIDATION_ERROR", "Duplicate serial in pack unit payload", 400)
     }
 
+    // is_allocatable mirrors the exclusion the packable pool applies. The pool is
+    // advisory -- it only shapes what the screen offers -- so without re-checking
+    // it here a caller posting serial ids directly could pack expired stock, and
+    // the tail would ship it: finalize commits the exact serials that were packed
+    // and never re-tests them. The dispatch path has always refused such stock
+    // (commitDoLineStock applies the same predicate), so the two paths disagreed.
     const serialRows = await db.query(
-      `SELECT id, item_id, status, do_line_item_id
-       FROM stock_serial_numbers
-       WHERE company_id = $1
-         AND id = ANY($2::int[])
-         AND warehouse_id = $3
-         AND client_id = $4
-       FOR UPDATE`,
+      `SELECT s.id, s.item_id, s.status, s.do_line_item_id,
+              to_char(s.expiry_date, 'YYYY-MM-DD') AS expiry_date_text,
+              (s.expiry_date IS NOT NULL AND s.expiry_date < CURRENT_DATE) AS is_expired,
+              i.min_shelf_life_days,
+              (${allocatableStockPredicate("s", "i")}) AS is_allocatable
+       FROM stock_serial_numbers s
+       JOIN items i ON i.id = s.item_id AND i.company_id = s.company_id
+       WHERE s.company_id = $1
+         AND s.id = ANY($2::int[])
+         AND s.warehouse_id = $3
+         AND s.client_id = $4
+       FOR UPDATE OF s`,
       [session.companyId, allSerialIds, doRow.warehouseId, doRow.clientId]
     )
     if (serialRows.rows.length !== allSerialIds.length) {
@@ -213,6 +236,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       item_id: unknown
       status: unknown
       do_line_item_id: unknown
+      expiry_date_text: unknown
+      is_expired: unknown
+      min_shelf_life_days: unknown
+      is_allocatable: unknown
     }
     const serialById = new Map<number, SerialRow>(
       serialRows.rows.map((row: SerialRow) => [Number(row.id), row])
@@ -248,6 +275,24 @@ export async function POST(request: NextRequest, context: RouteContext) {
           return fail(
             "WORKFLOW_BLOCKED",
             `Serial ${serialId} is reserved for another delivery order line and cannot be packed here`,
+            409
+          )
+        }
+        // Expired, or inside the item's contracted minimum remaining shelf life.
+        // Distinguished in the message because they are different problems: one
+        // is unsaleable, the other is saleable stock this customer will reject.
+        if (serial?.is_allocatable === false) {
+          // Both flags come from SQL: a date column arrives as a JS Date, so
+          // formatting or comparing it here would depend on the server timezone.
+          const expiry = serial.expiry_date_text ? String(serial.expiry_date_text) : "an unknown date"
+          const minShelfLife =
+            serial.min_shelf_life_days == null ? null : Number(serial.min_shelf_life_days)
+          await db.query("ROLLBACK")
+          return fail(
+            "WORKFLOW_BLOCKED",
+            serial.is_expired === true
+              ? `Serial ${serialId} expired on ${expiry} and cannot be packed`
+              : `Serial ${serialId} expires on ${expiry} and is inside the ${minShelfLife}-day minimum shelf life for this item, so it cannot be packed`,
             409
           )
         }

@@ -62,20 +62,30 @@ async function seedDo(fixtures) {
   const doNumber = `DO-DOCS-${SUFFIX}`
   return withDb(async (db) => {
     const companyId = fixtures.tenantA.companyId
-    const { clientId, warehouseId, itemId } = fixtures.ids.a
+    const { clientId, warehouseId } = fixtures.ids.a
     await db.query("BEGIN")
     try {
       // Session-scoped (is_local = false): withDb hands out a dedicated client and
       // a transaction-local setting would be discarded before the next statement.
       await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
 
+      // A dedicated item per run, matching tests/allocation.mjs. Sharing the
+      // fixture item made the packable-pool assertions meaningless: the pool is
+      // capped at the line's outstanding quantity and ordered by the allocation
+      // rule, so older leftover stock for a shared item takes every slot and this
+      // run's freshly-received serials never appear in it.
+      const itemCode = `ITM-DOCS-${SUFFIX}`
+      const item = await db.query(
+        `INSERT INTO items (company_id, item_code, item_name, uom, is_active)
+         VALUES ($1, $2, $3, 'PCS', true)
+         RETURNING id`,
+        [companyId, itemCode, `Document test ${itemCode}`]
+      )
+      const itemId = Number(item.rows[0].id)
+
       const grnLine = await db.query(
-        `SELECT gl.id
-         FROM grn_line_items gl
-         JOIN grn_header g ON g.id = gl.grn_header_id AND g.company_id = gl.company_id
-         WHERE gl.company_id = $1 AND gl.item_id = $2
-         ORDER BY gl.id DESC LIMIT 1`,
-        [companyId, itemId]
+        `SELECT gl.id FROM grn_line_items gl WHERE gl.company_id = $1 ORDER BY gl.id DESC LIMIT 1`,
+        [companyId]
       )
       const grnLineId = Number(grnLine.rows[0]?.id)
       if (!grnLineId) throw new Error("No GRN line fixture to hang stock off")
@@ -125,7 +135,7 @@ async function seedDo(fixtures) {
       }
 
       await db.query("COMMIT")
-      return { companyId, doId, doLineId, serialIds }
+      return { companyId, doId, doLineId, serialIds, itemId, itemCode }
     } catch (error) {
       await db.query("ROLLBACK")
       throw error
@@ -166,7 +176,7 @@ async function assertDocument(token, label, type, id, { minRows = 1 } = {}) {
 async function main() {
   const fixtures = await ensureChaosFixtures()
   const token = await login(fixtures)
-  const { doId, doLineId, serialIds } = await seedDo(fixtures)
+  const { doId, doLineId, serialIds, itemCode } = await seedDo(fixtures)
 
   // ---- documents available before anything is packed -----------------------
   await assertDocument(token, "dispatch-note", "dispatch-note", doId)
@@ -179,15 +189,18 @@ async function main() {
   const emptyTail = must("tail read (pre-pack)", await api(`/do/${doId}/tail`, { token }))
   check("tail: DO resolves", Number(emptyTail.do_id) === doId, `do_id=${emptyTail.do_id}`)
   check("tail: no pack units yet", emptyTail.pack_units.length === 0)
-  // The packable pool deliberately mirrors what POST /pack-units accepts: any
-  // unpacked IN_STOCK/RESERVED serial for this item, warehouse and client. It is
-  // therefore wider than this DO's own serials, and shared with other open DOs
-  // for the same client — so assert on this run's serials, not on the total.
-  const packableBefore = new Set(emptyTail.packable_serials.map((s) => Number(s.id)))
+  // The packable pool is capped at the line's outstanding quantity and ordered by
+  // the DO's allocation rule, so it is NARROWER than every eligible serial, not
+  // wider. Because this run owns its item outright, the pool must be exactly the
+  // serials it seeded — filtered by item_code so unrelated fixture stock on other
+  // lines cannot mask a regression either way.
+  const poolIds = (rows) =>
+    new Set(rows.filter((s) => s.item_code === itemCode).map((s) => Number(s.id)))
+  const packableBefore = poolIds(emptyTail.packable_serials)
   check(
-    "tail: this run's serials are packable",
-    serialIds.every((id) => packableBefore.has(id)),
-    `pool=${packableBefore.size}`
+    "tail: the packable pool is exactly this run's serials",
+    packableBefore.size === serialIds.length && serialIds.every((id) => packableBefore.has(id)),
+    `pool=${[...packableBefore].join(",")} seeded=${serialIds.join(",")}`
   )
 
   // ---- drive the tail ------------------------------------------------------
@@ -259,11 +272,11 @@ async function main() {
     `n=${fullTail.loads[0]?.pack_unit_count}`
   )
   check("tail: delivery note present", fullTail.delivery_notes.length === 1)
-  const packableAfter = new Set(fullTail.packable_serials.map((s) => Number(s.id)))
+  const packableAfter = poolIds(fullTail.packable_serials)
   check(
     "tail: shipped serials left the packable pool",
     serialIds.every((id) => !packableAfter.has(id)),
-    `pool=${packableAfter.size}`
+    `pool=${[...packableAfter].join(",") || "empty"}`
   )
   check(
     "tail: pool shrank by exactly this run's serials",

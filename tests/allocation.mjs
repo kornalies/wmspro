@@ -284,6 +284,81 @@ async function main() {
     `first=${pool[0]?.id} expected=${advisory.serials.NEW_SOON}`
   )
 
+  // ---- the pack ROUTE enforces the pool's exclusions, not just the pool ----
+  // The pool only shapes what the screen offers. Before this was enforced at the
+  // route, a caller posting serial ids directly could pack expired stock and the
+  // tail shipped it -- finalize commits exactly what was packed and never
+  // re-tests it -- while the dispatch path refused the same stock. Verified end
+  // to end: pack 200 -> goods issue 200 -> load 200 -> finalize 200 -> DISPATCHED.
+  const packGuard = await seed(fixtures, { allocationRule: "FEFO", extraExpired: 1 })
+  await withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(packGuard.companyId)])
+    // seed() leaves the DO STAGED for the dispatch path; packing needs PICKED,
+    // and STAGED -> PICKED is not a legal transition, so set it directly.
+    await db.query(`UPDATE do_header SET status = 'PICKED' WHERE id = $1 AND company_id = $2`, [
+      packGuard.doId,
+      packGuard.companyId,
+    ])
+  })
+
+  const packExpired = await api(`/do/${packGuard.doId}/pack-units`, {
+    method: "POST",
+    token,
+    body: {
+      pack_type: "PALLET",
+      lines: [{ do_line_item_id: packGuard.doLineId, serial_ids: [packGuard.serials.EXPIRED_0] }],
+    },
+  })
+  check(
+    "pack-units refuses expired stock",
+    packExpired.res.status === 409,
+    `status=${packExpired.res.status} ${packExpired.json?.error?.message ?? ""}`
+  )
+  check(
+    "the pack refusal names expiry as the reason",
+    /expired/i.test(packExpired.json?.error?.message ?? ""),
+    String(packExpired.json?.error?.message ?? "").slice(0, 140)
+  )
+
+  // The guard must not over-block: allocatable stock still packs.
+  const packGood = await api(`/do/${packGuard.doId}/pack-units`, {
+    method: "POST",
+    token,
+    body: {
+      pack_type: "PALLET",
+      lines: [{ do_line_item_id: packGuard.doLineId, serial_ids: [packGuard.serials.OLD_LATE] }],
+    },
+  })
+  check(
+    "pack-units still accepts allocatable stock",
+    packGood.res.ok,
+    `status=${packGood.res.status} ${JSON.stringify(packGood.json?.error ?? "")}`
+  )
+
+  // Minimum shelf life is a separate rule from expiry and must block too: this
+  // stock is saleable, but a customer contracted to 30 days will reject it.
+  const shelfPack = await seed(fixtures, { allocationRule: "FEFO", minShelfLifeDays: 30 })
+  await withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(shelfPack.companyId)])
+    await db.query(`UPDATE do_header SET status = 'PICKED' WHERE id = $1 AND company_id = $2`, [
+      shelfPack.doId,
+      shelfPack.companyId,
+    ])
+  })
+  const packShort = await api(`/do/${shelfPack.doId}/pack-units`, {
+    method: "POST",
+    token,
+    body: {
+      pack_type: "PALLET",
+      lines: [{ do_line_item_id: shelfPack.doLineId, serial_ids: [shelfPack.serials.NEW_SOON] }],
+    },
+  })
+  check(
+    "pack-units refuses stock inside the minimum shelf life",
+    packShort.res.status === 409 && /shelf life/i.test(packShort.json?.error?.message ?? ""),
+    `status=${packShort.res.status} ${String(packShort.json?.error?.message ?? "").slice(0, 140)}`
+  )
+
   // ---- expiry exposure ----------------------------------------------------
   const exposure = must("expiry exposure", await api("/stock/expiry?days=30", { token }))
   check("exposure reports totals", typeof exposure.totals?.EXPIRED === "number", JSON.stringify(exposure.totals))

@@ -377,6 +377,251 @@ async function runLegacyDispatchCase(fixtures, token) {
   }
 }
 
+/**
+ * Per-DO outbound path exclusivity (lib/outbound-path.ts).
+ *
+ * Both paths stay open to every tenant; a single order may not use both, because
+ * the billing dedupe key includes event_date, so a mixed order either double-bills
+ * (different dates) or silently under-bills (same date, upsert replaces the
+ * quantity rather than summing). Asserts both directions, that a capture-only
+ * dispatch call is still allowed on a tail order, and that voiding the pack units
+ * releases the order.
+ */
+async function runPathExclusivityCase(fixtures, token) {
+  const itemId = fixtures.ids.a.itemId
+
+  // Direction 1: tail claims the order -> dispatch with quantity is refused.
+  {
+    const scenario = await seedScenario(fixtures)
+    const { companyId, doId, doLineId, serialIds } = scenario
+    try {
+      const packed = must(
+        "exclusivity: create pack unit",
+        await api(`/do/${doId}/pack-units`, {
+          method: "POST",
+          token,
+          body: {
+            pack_type: "PALLET",
+            lines: [{ do_line_item_id: doLineId, serial_ids: serialIds }],
+          },
+        })
+      )
+      must(
+        "exclusivity: move to STAGED",
+        await api(`/do/${doId}/status`, { method: "POST", token, body: { status: "STAGED" } })
+      )
+
+      const blocked = await api(`/do/${doId}/dispatch`, {
+        method: "POST",
+        token,
+        body: {
+          vehicle_number: "KA01MIXED",
+          driver_name: "Mixed Driver",
+          driver_phone: "7777700001",
+          items: [{ item_id: itemId, quantity: 1 }],
+        },
+      })
+      check(
+        "exclusivity: dispatch blocked on a packed DO",
+        blocked.res.status === 409 && blocked.json?.error?.code === "OUTBOUND_PATH_CONFLICT",
+        `status=${blocked.res.status} code=${blocked.json?.error?.code}`
+      )
+
+      const state = await readState(companyId, doId, serialIds)
+      check(
+        "exclusivity: blocked dispatch moved no stock and staged no charge",
+        (state.stock.IN_STOCK ?? 0) === QTY && state.chargeCount === 0 && state.dispatched === 0,
+        `stock=${JSON.stringify(state.stock)} charges=${state.chargeCount} dispatched=${state.dispatched}`
+      )
+
+      // Capture-only must still pass: this route is the mobile capture endpoint
+      // (/do/[id]/capture aliases it) and is the ONLY writer of the outward
+      // register the Job Card bills handling time from. Blocking it would leave
+      // tail orders unbillable for machine handling.
+      const capture = await api(`/do/${doId}/dispatch`, {
+        method: "POST",
+        token,
+        body: {
+          items: [],
+          handlingType: "MACHINE HANDLING",
+          machineType: "FORKLIFT",
+          noOfCases: 2,
+          weight: 120.5,
+          outwardRemarks: "captured on a tail order",
+        },
+      })
+      check(
+        "exclusivity: capture-only dispatch still allowed on a packed DO",
+        capture.res.ok,
+        `status=${capture.res.status} ${JSON.stringify(capture.json?.error ?? "")}`
+      )
+
+      const captured = await withDb(async (db) => {
+        await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+        const row = await db.query(
+          `SELECT handling_type, machine_type, no_of_cases, weight_kg,
+                  total_quantity_dispatched
+             FROM do_header WHERE id = $1`,
+          [doId]
+        )
+        return row.rows[0]
+      })
+      check(
+        "exclusivity: capture wrote the outward register without dispatching",
+        String(captured?.handling_type) === "MACHINE" &&
+          Number(captured?.no_of_cases) === 2 &&
+          Number(captured?.total_quantity_dispatched) === 0,
+        JSON.stringify(captured)
+      )
+
+      // Voiding the pack unit releases the order to the other path.
+      must(
+        "exclusivity: void pack unit",
+        await api(`/do/pack-units/${packed.id}/cancel`, {
+          method: "POST",
+          token,
+          body: { reason: "path switch" },
+        })
+      )
+      must(
+        "exclusivity: re-stage after void",
+        await api(`/do/${doId}/status`, { method: "POST", token, body: { status: "STAGED" } })
+      )
+      const released = await api(`/do/${doId}/dispatch`, {
+        method: "POST",
+        token,
+        body: {
+          vehicle_number: "KA01MIXED",
+          driver_name: "Mixed Driver",
+          driver_phone: "7777700001",
+          items: [{ item_id: itemId, quantity: 1 }],
+        },
+      })
+      check(
+        "exclusivity: dispatch allowed once pack units are voided",
+        released.res.ok,
+        `status=${released.res.status} ${JSON.stringify(released.json?.error ?? "")}`
+      )
+    } finally {
+      await cleanup(companyId, doId, serialIds)
+    }
+  }
+
+  // Direction 2: dispatch claims the order -> entering the tail is refused.
+  {
+    const scenario = await seedScenario(fixtures)
+    const { companyId, doId, doLineId, serialIds } = scenario
+    try {
+      must(
+        "exclusivity: move to STAGED for partial dispatch",
+        await api(`/do/${doId}/status`, { method: "POST", token, body: { status: "STAGED" } })
+      )
+      must(
+        "exclusivity: partial dispatch",
+        await api(`/do/${doId}/dispatch`, {
+          method: "POST",
+          token,
+          body: {
+            vehicle_number: "KA01PARTIAL",
+            driver_name: "Partial Driver",
+            driver_phone: "7777700002",
+            items: [{ item_id: itemId, quantity: 1 }],
+          },
+        })
+      )
+
+      const state = await readState(companyId, doId, serialIds)
+      check(
+        "exclusivity: partial dispatch left the DO open",
+        state.status === "PARTIALLY_FULFILLED" && state.chargeCount === 1,
+        `status=${state.status} charges=${state.chargeCount}`
+      )
+
+      // First line of defence, and the reason this direction was never actually
+      // exploitable over the API: dispatching any quantity lands the DO in
+      // PARTIALLY_FULFILLED or COMPLETED, and neither can transition back to the
+      // PICKED / PACKED that pack-unit creation requires.
+      const noWayBack = await api(`/do/${doId}/status`, {
+        method: "POST",
+        token,
+        body: { status: "PICKED" },
+      })
+      check(
+        "exclusivity: status machine refuses PARTIALLY_FULFILLED -> PICKED",
+        noWayBack.res.status === 409,
+        `status=${noWayBack.res.status} code=${noWayBack.json?.error?.code}`
+      )
+
+      const remaining = serialIds.filter((_, index) => index > 0)
+      const blockedByStatus = await api(`/do/${doId}/pack-units`, {
+        method: "POST",
+        token,
+        body: {
+          pack_type: "PALLET",
+          lines: [{ do_line_item_id: doLineId, serial_ids: remaining }],
+        },
+      })
+      check(
+        "exclusivity: pack unit refused on a PARTIALLY_FULFILLED DO",
+        blockedByStatus.res.status === 409,
+        `status=${blockedByStatus.res.status} code=${blockedByStatus.json?.error?.code}`
+      )
+
+      const after = await readState(companyId, doId, serialIds)
+      check(
+        "exclusivity: still exactly one charge after the blocked pack",
+        after.chargeCount === 1,
+        `charges=${after.chargeCount}`
+      )
+    } finally {
+      await cleanup(companyId, doId, serialIds)
+    }
+  }
+
+  // Direction 2, backstop: the pack-units guard fires on state the status machine
+  // cannot produce but direct SQL can -- legacy rows, repair scripts such as
+  // scripts/db/reconcile-do-quantities.mjs, or a future status-table change. The
+  // audit found 27 pre-tail dispatch DOs, so such rows exist in the wild.
+  {
+    const scenario = await seedScenario(fixtures)
+    const { companyId, doId, doLineId, serialIds } = scenario
+    try {
+      await withDb(async (db) => {
+        await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+        await db.query(
+          `UPDATE do_line_items SET quantity_dispatched = 1
+            WHERE company_id = $1 AND id = $2`,
+          [companyId, doLineId]
+        )
+        // update_do_totals rewrites the header on that write, so force the
+        // otherwise-unreachable combination the guard has to cope with.
+        await db.query(
+          `UPDATE do_header
+              SET total_quantity_dispatched = 1, status = 'PICKED'
+            WHERE company_id = $1 AND id = $2`,
+          [companyId, doId]
+        )
+      })
+
+      const blocked = await api(`/do/${doId}/pack-units`, {
+        method: "POST",
+        token,
+        body: {
+          pack_type: "PALLET",
+          lines: [{ do_line_item_id: doLineId, serial_ids: serialIds.slice(1) }],
+        },
+      })
+      check(
+        "exclusivity: pack unit blocked on a PICKED DO carrying dispatched qty",
+        blocked.res.status === 409 && blocked.json?.error?.code === "OUTBOUND_PATH_CONFLICT",
+        `status=${blocked.res.status} code=${blocked.json?.error?.code}`
+      )
+    } finally {
+      await cleanup(companyId, doId, serialIds)
+    }
+  }
+}
+
 async function run() {
   const fixtures = await ensureChaosFixtures()
   const scenario = await seedScenario(fixtures)
@@ -499,6 +744,7 @@ async function run() {
     )
     await runGoodsIssueTriggerCase(fixtures, token)
     await runLegacyDispatchCase(fixtures, token)
+    await runPathExclusivityCase(fixtures, token)
   } finally {
     await cleanup(companyId, doId, serialIds)
   }
