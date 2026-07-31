@@ -49,6 +49,13 @@ type TenantSettingsPayload = {
   ui_branding: {
     logoUrl?: string
     primaryColor?: string
+    tagline?: string
+    address?: string
+    gstin?: string
+    cin?: string
+    phone?: string
+    website?: string
+    supportEmail?: string
     labels?: Record<string, string>
     [key: string]: unknown
   }
@@ -64,6 +71,13 @@ type DraftSettings = {
   ui_branding: {
     logoUrl: string
     primaryColor: string
+    tagline: string
+    address: string
+    gstin: string
+    cin: string
+    phone: string
+    website: string
+    supportEmail: string
     labelsText: string
   }
 }
@@ -154,6 +168,13 @@ function buildDraft(data: TenantSettingsPayload): DraftSettings {
     ui_branding: {
       logoUrl: data.ui_branding?.logoUrl || "",
       primaryColor: data.ui_branding?.primaryColor || "#2563eb",
+      tagline: data.ui_branding?.tagline || "",
+      address: data.ui_branding?.address || "",
+      gstin: data.ui_branding?.gstin || "",
+      cin: data.ui_branding?.cin || "",
+      phone: data.ui_branding?.phone || "",
+      website: data.ui_branding?.website || "",
+      supportEmail: data.ui_branding?.supportEmail || "",
       labelsText: JSON.stringify(data.ui_branding?.labels || {}, null, 2),
     },
   }
@@ -299,6 +320,13 @@ export default function TenantSettingsPage() {
         ui_branding: {
           logoUrl: draft.ui_branding.logoUrl,
           primaryColor: draft.ui_branding.primaryColor,
+          tagline: draft.ui_branding.tagline,
+          address: draft.ui_branding.address,
+          gstin: draft.ui_branding.gstin,
+          cin: draft.ui_branding.cin,
+          phone: draft.ui_branding.phone,
+          website: draft.ui_branding.website,
+          supportEmail: draft.ui_branding.supportEmail,
           labels,
         },
       }),
@@ -507,6 +535,71 @@ export default function TenantSettingsPage() {
                   <Input value={draft.ui_branding.primaryColor} onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, primaryColor: event.target.value } })} />
                   <div className="h-10 w-12 rounded-md border" style={{ backgroundColor: draft.ui_branding.primaryColor }} />
                 </div>
+              </div>
+              <div className="space-y-2 lg:col-span-2">
+                <div className="border-t pt-4">
+                  <p className="text-sm font-medium text-slate-900">Document Letterhead</p>
+                  <p className="text-xs text-slate-500">
+                    Printed on client-facing documents (delivery notes, invoices, packing
+                    lists). Internal operating documents use the platform letterhead. Blank
+                    fields fall back to the platform defaults.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Tagline</Label>
+                <Input
+                  placeholder="Warehouse Management & 3PL Services"
+                  value={draft.ui_branding.tagline}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, tagline: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Phone</Label>
+                <Input
+                  value={draft.ui_branding.phone}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, phone: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2 lg:col-span-2">
+                <Label>Registered Address</Label>
+                <Input
+                  placeholder="No. 14, Industrial Estate, Chennai 600 058, Tamil Nadu, India"
+                  value={draft.ui_branding.address}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, address: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>GSTIN</Label>
+                <Input
+                  className="font-mono"
+                  value={draft.ui_branding.gstin}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, gstin: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>CIN</Label>
+                <Input
+                  className="font-mono"
+                  value={draft.ui_branding.cin}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, cin: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Website</Label>
+                <Input
+                  placeholder="www.example.com"
+                  value={draft.ui_branding.website}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, website: event.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Support Email</Label>
+                <Input
+                  placeholder="support@example.com"
+                  value={draft.ui_branding.supportEmail}
+                  onChange={(event) => setDraft({ ...draft, ui_branding: { ...draft.ui_branding, supportEmail: event.target.value } })}
+                />
               </div>
               <div className="space-y-2 lg:col-span-2">
                 <Label>Labels JSON</Label>

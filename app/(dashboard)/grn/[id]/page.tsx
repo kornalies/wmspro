@@ -126,7 +126,7 @@ export default function GRNDetailsPage() {
           <Badge>{header.status}</Badge>
         </div>
         <Button asChild variant="outline">
-          <Link href={`/grn/print/${header.id}`}>
+          <Link href={`/documents/goods-receipt-note/${header.id}?back=/grn/${header.id}`}>
             <FileText className="mr-2 h-4 w-4" />
             Print
           </Link>

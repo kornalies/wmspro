@@ -448,7 +448,7 @@ export function GRNList() {
               size="sm"
               onClick={() =>
                 selectedRows.length === 1
-                  ? window.location.assign(`/grn/print/${selectedRows[0].id}`)
+                  ? window.location.assign(`/documents/goods-receipt-note/${selectedRows[0].id}?back=/grn`)
                   : toast.info("Select one GRN to print, or use each row's print action.")
               }
             >
@@ -496,7 +496,7 @@ export function GRNList() {
                   <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
                       <Button asChild variant="ghost" size="icon-sm" title="View GRN" aria-label={`View GRN ${grn.grn_number}`}><Link href={`/grn/${grn.id}`}><Eye className="h-4 w-4" /></Link></Button>
-                      <Button asChild variant="ghost" size="icon-sm" title="Print GRN" aria-label={`Print GRN ${grn.grn_number}`}><Link href={`/grn/print/${grn.id}`}><FileText className="h-4 w-4" /></Link></Button>
+                      <Button asChild variant="ghost" size="icon-sm" title="Print GRN" aria-label={`Print GRN ${grn.grn_number}`}><Link href={`/documents/goods-receipt-note/${grn.id}?back=/grn`}><FileText className="h-4 w-4" /></Link></Button>
                       {grn.status === "DRAFT" ? (
                         <>
                           <Button asChild variant="ghost" size="icon-sm" title="Edit Draft" aria-label={`Edit draft GRN ${grn.grn_number}`}><Link href={`/grn/${grn.id}/edit`}><Pencil className="h-4 w-4 text-amber-700" /></Link></Button>
