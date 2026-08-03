@@ -15,6 +15,7 @@ import {
   FileText,
   Loader2,
   Plus,
+  Printer,
   RotateCcw,
   Search,
   Send,
@@ -22,6 +23,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
+import Link from "next/link"
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
@@ -1015,6 +1017,14 @@ export function FinanceInvoices() {
                         <div className="flex justify-end gap-2">
                           <Button variant="ghost" size="sm" title="View" aria-label={`View invoice ${invoice.invoice_number}`} onClick={() => setViewInvoice(invoice)}>
                             <Eye className="h-4 w-4" />
+                          </Button>
+                          {/* The printable invoice is the EDDS document; the
+                              Download beside it is the older jsPDF data export,
+                              kept because finance workflows may still rely on it. */}
+                          <Button asChild variant="ghost" size="sm" title="Print Invoice" aria-label={`Print invoice ${invoice.invoice_number}`}>
+                            <Link href={`/documents/commercial-invoice/${invoice.id}?back=/finance/invoices`}>
+                              <Printer className="h-4 w-4" />
+                            </Link>
                           </Button>
                           <Button variant="ghost" size="sm" title="Download PDF" aria-label={`Download invoice ${invoice.invoice_number} PDF`} onClick={() => handleDownloadPDF(invoice)}>
                             <Download className="h-4 w-4" />

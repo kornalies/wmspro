@@ -448,6 +448,52 @@ async function seedInvoice(fixtures) {
   })
 }
 
+/**
+ * Assert every DocumentType is referenced from app/ or components/.
+ *
+ * Deliberately a source scan rather than a browser crawl: it is cheap, has no
+ * fixture requirements, and catches the exact failure it exists for — a builder
+ * that ships without an entry point. It cannot prove the link is reachable for a
+ * given user or role, only that one exists at all.
+ */
+async function checkUiReachability() {
+  const { readdirSync, readFileSync, statSync } = await import("node:fs")
+  const { join, extname } = await import("node:path")
+
+  const roots = ["app", "components"]
+  const sources = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      if (entry === "node_modules" || entry === ".next") continue
+      const full = join(dir, entry)
+      if (statSync(full).isDirectory()) walk(full)
+      else if ([".ts", ".tsx"].includes(extname(entry))) sources.push(full)
+    }
+  }
+  for (const r of roots) walk(r)
+
+  // The engine's own plumbing references every type by definition; excluding it
+  // is what makes this assert a real entry point rather than a self-reference.
+  const engine = ["document-sheet.tsx", "builders.ts", "types.ts", "branding.ts", "summary.ts", "verify.ts"]
+  const haystack = sources
+    .filter((f) => !engine.some((e) => f.endsWith(e)))
+    .map((f) => readFileSync(f, "utf8"))
+    .join("\n")
+
+  const types = [
+    "pick-list", "packing-list", "goods-issue-note", "goods-receipt-note",
+    "delivery-note", "consignment-note", "gate-pass", "cycle-count-sheet",
+    "dispatch-manifest", "commercial-invoice", "job-card", "dispatch-note",
+    "packing-slip",
+  ]
+  const orphans = types.filter((t) => !haystack.includes(`"${t}"`) && !haystack.includes(`/documents/${t}/`))
+  check(
+    "every document type has a UI entry point",
+    orphans.length === 0,
+    orphans.length ? `unreachable: ${orphans.join(", ")}` : `all ${types.length} linked`
+  )
+}
+
 async function main() {
   const fixtures = await ensureChaosFixtures()
   const token = await login(fixtures)
@@ -725,6 +771,15 @@ async function main() {
     gatePass?.branding?.companyName !== finalDn?.branding?.companyName,
     `gate-pass=${gatePass?.branding?.companyName} vs delivery-note=${finalDn?.branding?.companyName}`
   )
+
+  // ---- reachability --------------------------------------------------------
+  // Every document type must be linked from somewhere in the UI.
+  //
+  // This exists because four types shipped with builders, API routes and full
+  // green coverage here, yet no button anywhere opened them — the suite calls
+  // the API directly, so it could not see that a user had no way in. A document
+  // nobody can reach is not delivered, and only a printed export revealed it.
+  await checkUiReachability()
 
   // ---- rejections ----------------------------------------------------------
   const badType = await api(`/documents/not-a-real-doc/${doId}`, { token })
