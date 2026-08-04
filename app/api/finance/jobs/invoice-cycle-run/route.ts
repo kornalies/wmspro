@@ -58,6 +58,9 @@ export async function POST(request: NextRequest) {
         due_client_count: summary.dueClientCount,
         profile_count: summary.profileCount,
         skipped_count: summary.skippedCount,
+        // Non-empty means some clients still have older unbilled periods beyond this
+        // run's per-client cap. Surfaced so a partial run is never read as full coverage.
+        truncated_clients: summary.truncatedClients,
       },
       "Invoice cycle run completed"
     )
