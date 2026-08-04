@@ -1,9 +1,11 @@
 "use client"
 
-import { Loader2 } from "lucide-react"
+import Link from "next/link"
+import { Loader2, Printer } from "lucide-react"
 
 import { useGateOutLogs } from "@/hooks/use-gate"
 import { GateOutForm } from "@/components/gate/GateOutForm"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
@@ -52,6 +54,7 @@ export default function GateOutPage() {
                   <TableHead>Vehicle</TableHead>
                   <TableHead>Driver</TableHead>
                   <TableHead>Date/Time</TableHead>
+                  <TableHead className="text-right">Gate Pass</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -62,6 +65,19 @@ export default function GateOutPage() {
                     <TableCell>{row.vehicle_number}</TableCell>
                     <TableCell>{row.driver_name}</TableCell>
                     <TableCell>{new Date(row.gate_out_datetime).toLocaleString()}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        asChild
+                        variant="ghost"
+                        size="sm"
+                        title="Print Gate Pass"
+                        aria-label={`Print gate pass ${row.gate_out_number}`}
+                      >
+                        <Link href={`/documents/gate-pass/${row.id}?back=/gate/out`}>
+                          <Printer className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

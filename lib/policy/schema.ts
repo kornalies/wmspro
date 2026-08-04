@@ -47,16 +47,37 @@ const mobilePoliciesSchema = z
     scanMode: "serial_only",
   })
 
+/**
+ * The corporate letterhead fields below back FR-01/FR-08 of the document design
+ * standard: printed documents carry the tenant's registered address, tax
+ * identifiers and support contact. They live here rather than as columns on
+ * `companies` — which has none of them — so adding them cost no migration.
+ * Empty values fall back to the platform defaults in lib/documents/branding.ts.
+ */
 const brandingSchema = z
   .object({
     logoUrl: z.string().default(""),
     primaryColor: z.string().default("#2563eb"),
+    tagline: z.string().default(""),
+    address: z.string().default(""),
+    gstin: z.string().default(""),
+    cin: z.string().default(""),
+    phone: z.string().default(""),
+    website: z.string().default(""),
+    supportEmail: z.string().default(""),
     labels: z.record(z.string(), z.string()).default({}),
   })
   .catchall(z.unknown())
   .default({
     logoUrl: "",
     primaryColor: "#2563eb",
+    tagline: "",
+    address: "",
+    gstin: "",
+    cin: "",
+    phone: "",
+    website: "",
+    supportEmail: "",
     labels: {},
   })
 
@@ -101,6 +122,13 @@ export function getDefaultTenantSettings(): TenantSettingsShape {
     ui_branding: {
       logoUrl: "",
       primaryColor: "#2563eb",
+      tagline: "",
+      address: "",
+      gstin: "",
+      cin: "",
+      phone: "",
+      website: "",
+      supportEmail: "",
       labels: {},
     },
   }

@@ -36,7 +36,8 @@
     "test:documents": "node scripts/db/run-with-env.mjs tests/documents.mjs",
     "test:cycle-count": "node scripts/db/run-with-env.mjs tests/cycle-count.mjs",
     "test:allocation": "node scripts/db/run-with-env.mjs tests/allocation.mjs",
-    "test:locations": "node scripts/db/run-with-env.mjs tests/location-generator.mjs"
+    "test:locations": "node scripts/db/run-with-env.mjs tests/location-generator.mjs",
+    "test:billing-cycle": "node tests/billing-cycle.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -63,6 +64,7 @@
     "next": "16.1.6",
     "next-themes": "^0.4.6",
     "pg": "^8.16.3",
+    "qrcode": "^1.5.4",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -79,6 +81,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.24",

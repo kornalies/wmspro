@@ -89,6 +89,17 @@ export default async function proxy(request: NextRequest) {
     return applyApiCorsHeaders(response, request)
   }
 
+  // Document verification (FR-09) is deliberately public: the QR on a printed
+  // delivery note is scanned by transporters, consignees and auditors who have
+  // no WMS login, and redirecting them to /login would make the feature
+  // pointless. It is matched here rather than left off the matcher entirely so
+  // that it still receives the enterprise security headers below. Authenticity
+  // rests on the signed token, and the page it renders is redacted by design —
+  // see lib/documents/verify.ts and app/verify/[token]/page.tsx.
+  if (path === "/verify" || path.startsWith("/verify/")) {
+    return nextWithHeaders(requestId, request)
+  }
+
   const auth = await getTokenPayload(request)
   const payload = auth.payload
 
@@ -255,5 +266,8 @@ export const config = {
     "/wes/:path*",
     "/portal/:path*",
     "/freight/:path*",
+    // Public, but matched so it still gets the enterprise security headers.
+    // See the early return in proxy() above.
+    "/verify/:path*",
   ],
 }

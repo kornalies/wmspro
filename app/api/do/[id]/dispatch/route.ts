@@ -9,6 +9,7 @@ import { getOutboundBillingTrigger } from "@/lib/company-settings"
 import { writeAudit } from "@/lib/audit"
 import { getDOStatusErrorMessage, isDOStatus, normalizeDOStatus } from "@/lib/do-status"
 import { OutboundStockError, commitDoLineStock } from "@/lib/outbound-stock"
+import { getOutboundPathClaim, outboundPathConflictMessage } from "@/lib/outbound-path"
 import { normalizeAllocationRule } from "@/lib/allocation"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
@@ -262,6 +263,27 @@ export async function POST(request: NextRequest, context: RouteContext) {
         `DO must be in STAGED status before first dispatch. Current status is ${currentStatus || "UNKNOWN"}.`,
         409
       )
+    }
+
+    // An order already in the packed tail cannot also be dispatched here -- see
+    // lib/outbound-path.ts for why mixing the two corrupts the order's billing.
+    //
+    // Gated on requestedDispatchQty so a capture-only call still succeeds. This
+    // route doubles as the mobile capture endpoint (/do/[id]/capture aliases it,
+    // migration 013), and with no quantities it writes only outward-register
+    // fields -- supplier, invoice, cases, pallets, handling and machine times --
+    // which no tail endpoint captures and which the Job Card bills handling time
+    // from. Blocking that would leave tail orders with an unbillable Job Card.
+    if (requestedDispatchQty > 0) {
+      const claim = await getOutboundPathClaim(dbClient, session.companyId, doId)
+      if (claim?.path === "TAIL") {
+        await dbClient.query("ROLLBACK")
+        return fail(
+          "OUTBOUND_PATH_CONFLICT",
+          outboundPathConflictMessage(claim, "DISPATCH"),
+          409
+        )
+      }
     }
 
     let hasDispatchedAnyLine = false

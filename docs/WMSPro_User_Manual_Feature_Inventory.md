@@ -6,7 +6,7 @@ Source scope: `C:\Users\Admin-PC\wms-frontend` codebase (App Router pages, sideb
 
 ### 1.1 Core Warehouse Operations
 - Dashboard (`/dashboard`): executive KPIs, alerts, recent activity, billing snapshot, drill-down links.
-- GRN Entry (`/grn`, `/grn/new`, `/grn/new/manual`, `/grn/[id]`, `/grn/[id]/edit`, `/grn/print/[id]`): inbound receiving and GRN lifecycle.
+- GRN Entry (`/grn`, `/grn/new`, `/grn/new/manual`, `/grn/[id]`, `/grn/[id]/edit`): inbound receiving and GRN lifecycle. Printing moved to the document engine at `/documents/goods-receipt-note/[id]`.
 - Mobile GRN Approval (`/grn/mobile-approvals`, `/grn/mobile-approvals/[id]`): review/approve/reject mobile captures into stock.
 - DO Processing (`/do`, `/do/new`, `/do/[id]`, `/do/[id]/fulfill`): outbound order handling and fulfillment.
 - DO Waves (`/do/waves`): wave creation/allocation/release/task flow.

@@ -1,3 +1,4 @@
+import { type BillingCycle, billingDuePeriods } from "@/lib/billing-cycle"
 import { DEFAULT_GST_RATE, computeGstSplit, round2 } from "@/lib/money"
 
 type DBClient = {
@@ -20,7 +21,6 @@ type SourceType = "GRN" | "DO" | "VAS" | "STORAGE" | "MANUAL"
 type SupplyType = "INTRA_STATE" | "INTER_STATE"
 type CalcMethod = "FLAT" | "PER_UNIT" | "SLAB" | "PERCENT"
 type SlabMode = "ABSOLUTE" | "MARGINAL"
-type BillingCycle = "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY"
 const OPERATIONAL_CHARGE_TYPES: ChargeType[] = ["INBOUND_HANDLING", "OUTBOUND_HANDLING", "STORAGE", "VAS"]
 
 function toNum(value: unknown, fallback = 0) {
@@ -30,96 +30,6 @@ function toNum(value: unknown, fallback = 0) {
 
 function monthLabel(dateIso: string) {
   return new Date(dateIso).toLocaleString("en-IN", { month: "short", year: "numeric" })
-}
-
-function parseIsoDateUtc(value: string) {
-  const d = new Date(`${value.slice(0, 10)}T00:00:00.000Z`)
-  return Number.isNaN(d.getTime()) ? null : d
-}
-
-function toIsoDateUtc(date: Date) {
-  return date.toISOString().slice(0, 10)
-}
-
-function endOfMonthUtc(year: number, month0: number) {
-  return new Date(Date.UTC(year, month0 + 1, 0))
-}
-
-function startOfQuarterUtc(year: number, quarterIndex: number) {
-  return new Date(Date.UTC(year, quarterIndex * 3, 1))
-}
-
-function endOfQuarterUtc(year: number, quarterIndex: number) {
-  return new Date(Date.UTC(year, quarterIndex * 3 + 3, 0))
-}
-
-function isoDayOfWeek(date: Date) {
-  const day = date.getUTCDay()
-  return day === 0 ? 7 : day
-}
-
-function billingCycleWindow(
-  cycle: BillingCycle,
-  runDateIso: string,
-  billingDayOfWeek?: number | null,
-  billingDayOfMonth?: number | null,
-  contractEffectiveFromIso?: string | null
-) {
-  const runDate = parseIsoDateUtc(runDateIso)
-  if (!runDate) return { isDue: false, periodFrom: null, periodTo: null, reason: "Invalid run date" }
-
-  if (cycle === "WEEKLY") {
-    const dueDow = Math.max(Math.min(toNum(billingDayOfWeek, 7), 7), 1)
-    const runDow = isoDayOfWeek(runDate)
-    if (runDow !== dueDow) {
-      return { isDue: false, periodFrom: null, periodTo: null, reason: `Not due for weekly cycle day ${dueDow}` }
-    }
-    const from = new Date(runDate)
-    from.setUTCDate(from.getUTCDate() - 6)
-    return { isDue: true, periodFrom: toIsoDateUtc(from), periodTo: toIsoDateUtc(runDate), reason: null }
-  }
-
-  if (cycle === "MONTHLY") {
-    const y = runDate.getUTCFullYear()
-    const m = runDate.getUTCMonth()
-    const monthEnd = endOfMonthUtc(y, m)
-    const dueDom = billingDayOfMonth && billingDayOfMonth > 0 ? Math.min(billingDayOfMonth, monthEnd.getUTCDate()) : monthEnd.getUTCDate()
-    if (runDate.getUTCDate() !== dueDom) {
-      return { isDue: false, periodFrom: null, periodTo: null, reason: `Not due for monthly cycle day ${dueDom}` }
-    }
-    const from = new Date(Date.UTC(y, m, 1))
-    return { isDue: true, periodFrom: toIsoDateUtc(from), periodTo: toIsoDateUtc(runDate), reason: null }
-  }
-
-  if (cycle === "QUARTERLY") {
-    const y = runDate.getUTCFullYear()
-    const q = Math.floor(runDate.getUTCMonth() / 3)
-    const quarterEnd = endOfQuarterUtc(y, q)
-    if (toIsoDateUtc(runDate) !== toIsoDateUtc(quarterEnd)) {
-      return { isDue: false, periodFrom: null, periodTo: null, reason: "Not quarter end date" }
-    }
-    const from = startOfQuarterUtc(y, q)
-    return { isDue: true, periodFrom: toIsoDateUtc(from), periodTo: toIsoDateUtc(runDate), reason: null }
-  }
-
-  const contractDate = contractEffectiveFromIso ? parseIsoDateUtc(contractEffectiveFromIso) : null
-  if (!contractDate) {
-    return { isDue: false, periodFrom: null, periodTo: null, reason: "Contract anniversary unavailable for yearly cycle" }
-  }
-  const annivMonth = contractDate.getUTCMonth()
-  const annivDay = contractDate.getUTCDate()
-  const runYear = runDate.getUTCFullYear()
-  const thisYearMaxDay = endOfMonthUtc(runYear, annivMonth).getUTCDate()
-  const thisYearAnniv = new Date(Date.UTC(runYear, annivMonth, Math.min(annivDay, thisYearMaxDay)))
-  if (toIsoDateUtc(thisYearAnniv) !== toIsoDateUtc(runDate)) {
-    return { isDue: false, periodFrom: null, periodTo: null, reason: "Not contract anniversary date" }
-  }
-  const prevYear = runYear - 1
-  const prevYearMaxDay = endOfMonthUtc(prevYear, annivMonth).getUTCDate()
-  const prevAnniv = new Date(Date.UTC(prevYear, annivMonth, Math.min(annivDay, prevYearMaxDay)))
-  const from = new Date(prevAnniv)
-  from.setUTCDate(from.getUTCDate() + 1)
-  return { isDue: true, periodFrom: toIsoDateUtc(from), periodTo: toIsoDateUtc(runDate), reason: null }
 }
 
 async function resolveSupplyType(
@@ -933,7 +843,8 @@ export async function generateInvoiceDraftsByBillingCycle(
        cbp.billing_cycle,
        cbp.billing_day_of_week,
        cbp.billing_day_of_month,
-       cc.effective_from::text AS contract_effective_from
+       cc.effective_from::text AS contract_effective_from,
+       ub.since::text AS unbilled_since
      FROM client_billing_profile cbp
      LEFT JOIN LATERAL (
        SELECT effective_from
@@ -944,6 +855,16 @@ export async function generateInvoiceDraftsByBillingCycle(
        ORDER BY effective_from DESC, id DESC
        LIMIT 1
      ) cc ON true
+     LEFT JOIN LATERAL (
+       -- Earliest still-unbilled charge. This bounds how far back catch-up reaches:
+       -- a client with nothing outstanding yields no periods, so the enumeration can
+       -- never run away over empty history.
+       SELECT MIN(bt.event_date) AS since
+       FROM billing_transactions bt
+       WHERE bt.company_id = cbp.company_id
+         AND bt.client_id = cbp.client_id
+         AND bt.status = 'UNBILLED'
+     ) ub ON true
      WHERE cbp.company_id = $1
        AND cbp.is_active = true
        ${clientFilter}
@@ -954,41 +875,51 @@ export async function generateInvoiceDraftsByBillingCycle(
   let generatedCount = 0
   let dueClientCount = 0
   const skipped: Array<{ clientId: number; reason: string }> = []
+  const truncatedClients: Array<{ clientId: number; billedThrough: string }> = []
   const windows: Array<{ clientId: number; cycle: string; periodFrom: string; periodTo: string; runKey: string; generated: number }> = []
 
   for (const row of profileRes.rows) {
     const clientId = toNum(row.client_id)
     const cycle = String(row.billing_cycle || "MONTHLY") as BillingCycle
-    const window = billingCycleWindow(
-      cycle,
-      args.runDate,
-      toNum(row.billing_day_of_week, 0) || null,
-      toNum(row.billing_day_of_month, 0) || null,
-      (row.contract_effective_from as string | null) || null
-    )
-    if (!window.isDue || !window.periodFrom || !window.periodTo) {
-      skipped.push({ clientId, reason: window.reason || "Not due" })
+
+    const due = billingDuePeriods(cycle, args.runDate, {
+      billingDayOfWeek: toNum(row.billing_day_of_week, 0) || null,
+      billingDayOfMonth: toNum(row.billing_day_of_month, 0) || null,
+      contractEffectiveFrom: (row.contract_effective_from as string | null) || null,
+      since: (row.unbilled_since as string | null) || null,
+    })
+
+    if (!due.periods.length) {
+      skipped.push({ clientId, reason: due.reason || "Not due" })
       continue
     }
+    if (due.truncated) {
+      // Never let a bounded run read as full coverage: the caller records this in
+      // billing_job_runs.details so a remaining backlog is visible rather than implied.
+      truncatedClients.push({ clientId, billedThrough: due.periods[due.periods.length - 1].periodTo })
+    }
+
     dueClientCount += 1
-    const runKey = `${args.runKeyPrefix}-${clientId}-${window.periodFrom}-${window.periodTo}`
-    const summary = await generateInvoiceDrafts(db, {
-      companyId: args.companyId,
-      userId: args.userId,
-      periodFrom: window.periodFrom,
-      periodTo: window.periodTo,
-      clientId,
-      runKey,
-    })
-    generatedCount += toNum(summary.generatedCount, 0)
-    windows.push({
-      clientId,
-      cycle,
-      periodFrom: window.periodFrom,
-      periodTo: window.periodTo,
-      runKey,
-      generated: toNum(summary.generatedCount, 0),
-    })
+    for (const period of due.periods) {
+      const runKey = `${args.runKeyPrefix}-${clientId}-${period.periodFrom}-${period.periodTo}`
+      const summary = await generateInvoiceDrafts(db, {
+        companyId: args.companyId,
+        userId: args.userId,
+        periodFrom: period.periodFrom,
+        periodTo: period.periodTo,
+        clientId,
+        runKey,
+      })
+      generatedCount += toNum(summary.generatedCount, 0)
+      windows.push({
+        clientId,
+        cycle,
+        periodFrom: period.periodFrom,
+        periodTo: period.periodTo,
+        runKey,
+        generated: toNum(summary.generatedCount, 0),
+      })
+    }
   }
 
   return {
@@ -998,6 +929,7 @@ export async function generateInvoiceDraftsByBillingCycle(
     skippedCount: skipped.length,
     skipped,
     windows,
+    truncatedClients,
   }
 }
 

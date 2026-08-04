@@ -548,6 +548,9 @@ export default function OutboundTail({ doRef }: { doRef: string }) {
               </span>
               <div className="ml-auto flex gap-2">
                 <DocLink type="consignment-note" id={l.id} label="Consignment Note" />
+                {/* Keyed on the load: the manifest gathers every load sharing
+                    this vehicle and dispatch date into one trip sheet. */}
+                <DocLink type="dispatch-manifest" id={l.id} label="Dispatch Manifest" />
                 {l.status === "OPEN" ? (
                   <Button
                     size="sm"

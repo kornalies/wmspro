@@ -427,26 +427,48 @@ export default function CycleCountsPage() {
                     {plan.zone_code ? ` · ${plan.zone_code}` : ""} · {plan.warehouse_name} ·{" "}
                     {plan.open_tasks}/{plan.total_tasks} open
                   </span>
-                  {plan.status !== "CLOSED" ? (
+                  <span className="ml-auto flex items-center gap-2">
+                    {/* role="button" rather than a Link, because this row is
+                        itself a <button> and nesting interactive elements is
+                        invalid — the same reason "Close plan" below does it. */}
                     <span
                       role="button"
                       tabIndex={0}
-                      className="ml-auto rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                      className="rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                      title="Print count sheet"
                       onClick={(e) => {
                         e.stopPropagation()
-                        void run(
-                          `close-${plan.id}`,
-                          () => api.post(`/stock/cycle-counts/plans/${plan.id}`, {}),
-                          "Plan closed."
+                        window.location.assign(
+                          `/documents/cycle-count-sheet/${plan.id}?back=/stock/cycle-counts`
                         )
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") e.currentTarget.click()
                       }}
                     >
-                      Close plan
+                      Print sheet
                     </span>
-                  ) : null}
+                    {plan.status !== "CLOSED" ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void run(
+                            `close-${plan.id}`,
+                            () => api.post(`/stock/cycle-counts/plans/${plan.id}`, {}),
+                            "Plan closed."
+                          )
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.click()
+                        }}
+                      >
+                        Close plan
+                      </span>
+                    ) : null}
+                  </span>
                 </button>
 
                 {openPlanId === plan.id ? (
