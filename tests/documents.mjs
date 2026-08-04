@@ -410,9 +410,14 @@ async function seedInvoice(fixtures) {
            taxable_amount, cgst_amount, sgst_amount, igst_amount,
            total_tax_amount, grand_total, paid_amount, balance_amount, status
          )
+         -- These totals MUST equal the sum of the lines inserted below, because the
+         -- billing engine always derives the header from invoice_lines. A hardcoded
+         -- header that disagrees leaves a FINALIZED invoice whose stated grand_total
+         -- exceeds its own lines, which reads as a real revenue discrepancy in any
+         -- audit of this database. Lines: 153760 + 29952 taxable, 27676 + 5392 tax.
          VALUES ($1, $2, $3, 'MONTHLY', '2026-07',
                  DATE '2026-07-01', DATE '2026-07-31', CURRENT_DATE, CURRENT_DATE + 30, 'INR',
-                 236570, 21292, 21292, 0, 42584, 279154, 0, 279154, 'FINALIZED')
+                 183712, 16534, 16534, 0, 33068, 216780, 0, 216780, 'FINALIZED')
          RETURNING id`,
         [companyId, `INV-DOCS-${SUFFIX}`, clientId]
       )
@@ -569,14 +574,14 @@ async function main() {
   const invTable = invoice?.sections?.find((s) => s.kind === "table")
   check(
     "invoice groups money in Indian digits",
-    invTable?.totals?.gross === "2,79,154.00",
+    invTable?.totals?.gross === "2,16,780.00",
     invTable?.totals?.gross
   )
   check(
     "invoice renders amount in words",
     invoice?.sections
       ?.find((s) => s.kind === "fields" && s.title === "Amount in Words")
-      ?.fields?.[0]?.value === "Rupees Two Lakh Seventy Nine Thousand One Hundred Fifty Four only",
+      ?.fields?.[0]?.value === "Rupees Two Lakh Sixteen Thousand Seven Hundred Eighty only",
     invoice?.sections?.find((s) => s.kind === "fields" && s.title === "Amount in Words")?.fields?.[0]
       ?.value
   )
