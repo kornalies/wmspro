@@ -80,7 +80,7 @@ jobs:
       # superuser makes every view bypass RLS -- which isolation SCENARIO 1.4
       # checks for explicitly.
       MIGRATOR_DATABASE_URL: postgresql://wms_migrator:wms_migrator@localhost:5432/wms_test?sslmode=disable
-      DATABASE_URL: postgresql://wms:wms@localhost:5432/wms_test?sslmode=disable
+      DATABASE_URL: postgresql://wms_app:wms_app@localhost:5432/wms_test?sslmode=disable
       PGSSLMODE: disable
       WMS_COMPANY_CODE: GWU
       # ONLY FOR EPHEMERAL CI DB. NEVER reuse outside this isolated CI database.
@@ -112,7 +112,7 @@ jobs:
         run: |
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE wms_migrator LOGIN PASSWORD 'wms_migrator' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
-            -c "CREATE ROLE wms LOGIN PASSWORD 'wms' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
+            -c "CREATE ROLE wms_app LOGIN PASSWORD 'wms_app' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
             -c "ALTER SCHEMA public OWNER TO wms_migrator;" \
             -c "GRANT ALL ON SCHEMA public TO wms_migrator;"
 
@@ -143,19 +143,19 @@ jobs:
       - name: Run migrations
         run: npm run db:migrate
 
-      # Migrations create tables as the owning role. Only a handful of them grant
-      # to `wms` explicitly, so without a blanket grant the app role can read the
-      # schema and nothing else. RLS still applies -- `wms` is neither owner nor
-      # BYPASSRLS, so tenant isolation is enforced exactly as it is in production.
+      # The baseline dump carries no grants (--no-privileges), so without this the
+      # app role can see the schema and nothing else. RLS still applies --
+      # wms_app is neither owner nor BYPASSRLS, so tenant isolation is enforced
+      # exactly as it is in production.
       - name: Grant runtime privileges
         env:
           PGPASSWORD: postgres
         run: |
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
-            -c "GRANT USAGE ON SCHEMA public TO wms;" \
-            -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms;" \
-            -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms;" \
-            -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO wms;"
+            -c "GRANT USAGE ON SCHEMA public TO wms_app;" \
+            -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms_app;" \
+            -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms_app;" \
+            -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO wms_app;"
 
       - name: Seed
         run: npm run db:seed
