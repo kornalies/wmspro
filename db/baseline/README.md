@@ -15,7 +15,11 @@ This directory is the missing half:
 
 ## Standing up an empty database
 
+The dump emits a bare `CREATE SCHEMA public;`, so drop the server's default one first
+rather than editing the generated file:
+
 ```sh
+psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE;"
 psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/baseline/schema.sql
 psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/baseline/schema_migrations.sql
 npm run db:migrate   # applies only migrations newer than the baseline
