@@ -35,18 +35,43 @@ async function apiPut(path, token, body, headers = {}) {
   return { status: res.status, json }
 }
 
+// The suite never deletes its invoices, and uq_invoice_header_company_client_period
+// is (company_id, client_id, period_from, period_to). Fixtures used to pick a period
+// of anchor + (Date.now() % 300) days, so the slot space recycled after 300 runs and
+// the two anchors below overlapped each other -- a leftover row from an earlier run
+// then failed the whole suite on insert with a duplicate key. Claim the next unused
+// day after the anchor instead, which cannot collide with a previous run.
+async function nextFixturePeriod(client, companyId, clientId, anchor) {
+  const res = await client.query(
+    `SELECT to_char(
+              GREATEST(COALESCE(MAX(period_from) + 1, $3::date), $3::date),
+              'YYYY-MM-DD'
+            ) AS period
+       FROM invoice_header
+      WHERE company_id = $1
+        AND client_id = $2
+        AND period_from >= $3::date
+        AND period_from < $3::date + INTERVAL '40 years'`,
+    [companyId, clientId, anchor]
+  )
+  return res.rows[0].period
+}
+
 async function createFinanceFixture(fixtures) {
   const now = Date.now()
-  const future = new Date(Date.UTC(2099, 0, 1))
-  future.setUTCDate(future.getUTCDate() + (now % 300))
-  const invoiceDate = future.toISOString().slice(0, 10)
-  const dueDate = invoiceDate
   const out = { invoiceId: 0, billedTxId: 0 }
 
   await withDb(async (client) => {
     await client.query("BEGIN")
     try {
       await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      const invoiceDate = await nextFixturePeriod(
+        client,
+        fixtures.tenantA.companyId,
+        fixtures.ids.a.clientId,
+        "2099-01-01"
+      )
+      const dueDate = invoiceDate
 
       const inv = await client.query(
         `INSERT INTO invoice_header (
@@ -203,15 +228,19 @@ async function scenarioFH4UnsafeUnbillBlocked(token, billedTxId) {
 
 async function createVoidableInvoice(fixtures) {
   const now = Date.now()
-  const future = new Date(Date.UTC(2099, 6, 1))
-  future.setUTCDate(future.getUTCDate() + (now % 300))
-  const invoiceDate = future.toISOString().slice(0, 10)
   const out = { invoiceId: 0, billedTxId: 0 }
 
   await withDb(async (client) => {
     await client.query("BEGIN")
     try {
       await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      // Far enough past the FH anchor that the two fixtures' claimed days cannot meet.
+      const invoiceDate = await nextFixturePeriod(
+        client,
+        fixtures.tenantA.companyId,
+        fixtures.ids.a.clientId,
+        "2150-01-01"
+      )
 
       const inv = await client.query(
         `INSERT INTO invoice_header (

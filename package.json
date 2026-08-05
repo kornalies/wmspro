@@ -8,6 +8,7 @@
     "build:generate": "next build --experimental-build-mode=generate",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "ci:validate-env": "node scripts/ci/validate-env.mjs",
     "ci:auth-domain-guard": "node scripts/ci/auth-domain-guard.mjs",
     "db:migrate": "node scripts/db/run-with-env.mjs scripts/db/migrate.mjs",
@@ -37,7 +38,8 @@
     "test:cycle-count": "node scripts/db/run-with-env.mjs tests/cycle-count.mjs",
     "test:allocation": "node scripts/db/run-with-env.mjs tests/allocation.mjs",
     "test:locations": "node scripts/db/run-with-env.mjs tests/location-generator.mjs",
-    "test:billing-cycle": "node tests/billing-cycle.mjs"
+    "test:billing-cycle": "node tests/billing-cycle.mjs",
+    "test:suites": "node scripts/ci/run-suites.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -81,6 +83,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.20.4",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",

@@ -1,4 +1,4 @@
-import { Pool } from "pg"
+import { Pool, type QueryResult, type QueryResultRow } from "pg"
 import { cookies } from "next/headers"
 import { headers } from "next/headers"
 
@@ -15,7 +15,17 @@ const pool = new Pool({
 
 let dbRoleSafetyVerified = false
 
-export async function query(text: string, params?: unknown[]) {
+// The row type is generic so callers can name their shape. The default matches
+// pg's own (`any`): rows come back untyped from the driver, and tightening the
+// default would only push hundreds of casts into call sites without proving
+// anything about the actual SQL. Declaring the return type explicitly is what
+// pins pg's overloads to the object-row form -- left inferred, `rows` widens to
+// `any[] | any[][]` and every `rows.map((row) => ...)` becomes an implicit any.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function query<R extends QueryResultRow = any>(
+  text: string,
+  params?: unknown[]
+): Promise<QueryResult<R>> {
   const start = Date.now()
   const client = await pool.connect()
   try {
@@ -27,7 +37,7 @@ export async function query(text: string, params?: unknown[]) {
       headerStore.get("x-correlation-id") ||
       crypto.randomUUID()
     await applyTenantContextFromRequest(client)
-    const res = await client.query(text, params)
+    const res = await client.query<R>(text, params)
     await client.query("COMMIT")
     const duration = Date.now() - start
     console.log("Executed query", { requestId, duration, rows: res.rowCount })

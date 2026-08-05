@@ -42,5 +42,114 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `npm run build` uses --experimental-build-mode=compile, which skips type
+      # checking -- without this step type errors reach main with CI green.
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
+
+  db-suites:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-jwt-secret-that-is-long-enough-for-tests
+      # Migrations and the seed run as the owning role; the app and the suites
+      # connect as `wms`, which must stay NOSUPERUSER/NOBYPASSRLS or
+      # ensureSafeDbRole in lib/db.ts refuses every query by design.
+      MIGRATOR_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wms_test?sslmode=disable
+      DATABASE_URL: postgresql://wms:wms@localhost:5432/wms_test?sslmode=disable
+      PGSSLMODE: disable
+      WMS_COMPANY_CODE: GWU
+      # ONLY FOR EPHEMERAL CI DB. NEVER reuse outside this isolated CI database.
+      WMS_USERNAME: wms_ci
+      WMS_PASSWORD: wms_ci_password
+      WMS_API_BASE_URL: http://localhost:3000/api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create application role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE wms LOGIN PASSWORD 'wms' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
+
+      - name: Run migrations
+        run: npm run db:migrate
+
+      # Migrations create tables as the owning role. Only a handful of them grant
+      # to `wms` explicitly, so without a blanket grant the app role can read the
+      # schema and nothing else. RLS still applies -- `wms` is neither owner nor
+      # BYPASSRLS, so tenant isolation is enforced exactly as it is in production.
+      - name: Grant runtime privileges
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
+            -c "GRANT USAGE ON SCHEMA public TO wms;" \
+            -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms;" \
+            -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms;" \
+            -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO wms;"
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Build application
+        run: npx next build
+
+      - name: Start application
+        run: |
+          nohup npm run start > server.log 2>&1 &
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "App is healthy after ${i}s"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "App did not become healthy within 60s"
+            curl -sS http://localhost:3000/api/health || true
+            cat server.log
+            exit 1
+          fi
+
+      - name: Run database suites
+        run: npm run test:suites
+
+      # The suites assert over HTTP, so a 500 shows up as a failed assertion with
+      # no server-side stack. Surface the log whenever the job fails.
+      - name: Application log
+        if: failure()
+        run: cat server.log

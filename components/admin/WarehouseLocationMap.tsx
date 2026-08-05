@@ -12,8 +12,10 @@ type WarehouseMapRow = {
   warehouse_code: string
   city?: string
   state?: string
-  latitude?: number | null
-  longitude?: number | null
+  // `warehouses.latitude/longitude` are numeric(10,7); pg returns numeric as a
+  // string, so these arrive as strings over the API and must be coerced.
+  latitude?: number | string | null
+  longitude?: number | string | null
 }
 
 type WarehouseLocationMapProps = {
@@ -51,14 +53,17 @@ function normalizeText(value?: string) {
   return (value || "").trim().toLowerCase()
 }
 
+function toCoordinate(value?: number | string | null) {
+  if (value == null || value === "") return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function resolveCoordinates(warehouse: WarehouseMapRow): [number, number] | null {
-  if (
-    typeof warehouse.latitude === "number" &&
-    typeof warehouse.longitude === "number" &&
-    Number.isFinite(warehouse.latitude) &&
-    Number.isFinite(warehouse.longitude)
-  ) {
-    return [warehouse.latitude, warehouse.longitude]
+  const latitude = toCoordinate(warehouse.latitude)
+  const longitude = toCoordinate(warehouse.longitude)
+  if (latitude !== null && longitude !== null) {
+    return [latitude, longitude]
   }
 
   const cityKey = normalizeText(warehouse.city)
