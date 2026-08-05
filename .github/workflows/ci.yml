@@ -82,6 +82,9 @@ jobs:
       WMS_USERNAME: wms_ci
       WMS_PASSWORD: wms_ci_password
       WMS_API_BASE_URL: http://localhost:3000/api
+      # Gates the system cron route. The suite asserts both that the secret is
+      # required and that the fan-out works, so it must match the app's.
+      BILLING_CRON_SECRET: ci-billing-cron-secret
 
     steps:
       - name: Checkout

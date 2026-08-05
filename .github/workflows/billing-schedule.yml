@@ -1,0 +1,79 @@
+name: Billing schedule
+
+# Runs the daily billing jobs for every active tenant.
+#
+# Until this existed nothing was scheduled at all: /api/finance/jobs/* are
+# session-scoped, so a human had to click "run" per tenant. The cycle run is
+# catch-up capable (docs/billing-cron.md), which meant invoices were quietly
+# late rather than missing -- easy to leave broken, and impossible to notice.
+#
+# Requires two repository secrets:
+#   BILLING_APP_URL       e.g. https://wms.example.com  (no trailing slash)
+#   BILLING_CRON_SECRET   must match the deployed app's BILLING_CRON_SECRET
+# With either unset the job fails loudly rather than silently doing nothing.
+
+on:
+  schedule:
+    # 00:30 UTC daily. After the day has closed everywhere the tenants operate,
+    # and before the working day starts in IST.
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Billing date (YYYY-MM-DD). Defaults to today on the server."
+        required: false
+        type: string
+
+jobs:
+  run-billing-jobs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check configuration
+        env:
+          APP_URL: ${{ secrets.BILLING_APP_URL }}
+          CRON_SECRET: ${{ secrets.BILLING_CRON_SECRET }}
+        run: |
+          missing=""
+          [ -z "$APP_URL" ] && missing="$missing BILLING_APP_URL"
+          [ -z "$CRON_SECRET" ] && missing="$missing BILLING_CRON_SECRET"
+          if [ -n "$missing" ]; then
+            echo "Missing repository secret(s):$missing"
+            exit 1
+          fi
+
+      - name: Run billing jobs
+        env:
+          APP_URL: ${{ secrets.BILLING_APP_URL }}
+          CRON_SECRET: ${{ secrets.BILLING_CRON_SECRET }}
+          RUN_DATE: ${{ inputs.run_date }}
+        run: |
+          if [ -n "$RUN_DATE" ]; then
+            payload="{\"run_date\":\"$RUN_DATE\"}"
+          else
+            payload="{}"
+          fi
+
+          # --fail-with-body so a 4xx/5xx fails the step but still prints why.
+          response=$(curl --fail-with-body -sS -X POST \
+            "$APP_URL/api/finance/jobs/scheduled-run" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d "$payload")
+
+          echo "$response" | jq .
+
+          # A 200 only means the fan-out ran. Individual tenants can fail
+          # independently by design, so the step has to inspect the body --
+          # otherwise one tenant silently stops being invoiced forever.
+          failed=$(echo "$response" | jq -r '.data.failed_count // 0')
+          if [ "$failed" != "0" ]; then
+            echo "::error::$failed tenant job(s) failed"
+            echo "$response" | jq -r '.data.results[] | select(.status == "FAILED") | "\(.company_code) \(.job): \(.detail)"'
+            exit 1
+          fi
+
+          truncated=$(echo "$response" | jq -r '[.data.results[].detail.truncatedClients // [] | length] | add // 0')
+          if [ "$truncated" != "0" ]; then
+            echo "::warning::$truncated client(s) hit the per-run catch-up cap; run again to continue."
+          fi

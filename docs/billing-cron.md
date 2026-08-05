@@ -1,11 +1,49 @@
 # Billing Job Schedule
 
-- `00:05` daily: `POST /api/finance/jobs/storage-snapshot` with `snapshot_date=today`.
+- `00:30` UTC daily, **automated**: `.github/workflows/billing-schedule.yml` calls
+  `POST /api/finance/jobs/scheduled-run`, which runs the storage snapshot and then the
+  invoice cycle run for **every active tenant**. See "Scheduled Run" below.
 - `00:30` daily/weekly/monthly: operational trigger reconciliation (optional backfill through `/api/finance/billing-transactions`).
-- Manual only per tenant: `POST /api/finance/jobs/invoice-cycle-run` by tenant finance user.
-  No scheduler is wired up yet; the run is catch-up capable (see below), so invoices are
-  delayed rather than lost while it stays manual.
+- Per tenant, on demand: `POST /api/finance/jobs/invoice-cycle-run` by a tenant finance user.
+  Still supported, and still the way to run one tenant ahead of the schedule.
 - `01:00` daily/weekly/monthly: optional manual `POST /api/finance/invoices/draft` with requested `period_from`/`period_to`.
+
+## Scheduled Run (system)
+
+- Route: `/api/finance/jobs/scheduled-run`
+- Auth: **shared secret**, header `x-cron-secret`, compared against `BILLING_CRON_SECRET`.
+  There is no session — a cron has no tenant, which is exactly why the per-tenant routes
+  could never be scheduled. The secret is the entire authorisation boundary; treat it like
+  a deploy key and rotate it the same way.
+- **Fails closed:** with `BILLING_CRON_SECRET` unset the route returns `503 CRON_DISABLED`
+  for everyone. It is never open.
+- Scope: every `companies` row with `is_active = true`. Tenants with no billing profiles
+  simply return nothing, so the fan-out is a no-op for them.
+- Optional payload:
+  - `run_date` (`YYYY-MM-DD`, defaults to today)
+  - `jobs` (subset of `["storage-snapshot", "invoice-cycle-run"]`)
+  - `company_id` (single tenant, for debugging)
+- **Job order is load-bearing.** The storage snapshot writes the day's storage charges as
+  `billing_transactions`; the cycle run then sweeps unbilled charges onto invoices. Reversing
+  them under-bills storage by one cycle. The route sorts the requested jobs into this order
+  rather than trusting the caller's array.
+- **One tenant's failure does not stop the others.** Each tenant/job pair runs in its own
+  transaction and reports independently; the response carries `failed_count` and a per-tenant
+  `results` array. The workflow inspects the body, because HTTP 200 only means the fan-out
+  itself ran.
+- Every tenant/job pair records a `billing_job_runs` row with `run_key`
+  `CRON-<JOB_TYPE>-<run_date>` and `details.trigger = "cron"`, marked `SUCCESS` or `FAILED`.
+  The RUNNING row is committed separately from the work so a crash still leaves evidence.
+- Test: `npm run test:billing-cron` (needs the app running and `BILLING_CRON_SECRET` set).
+
+### Deploying the schedule
+
+1. Set `BILLING_CRON_SECRET` in the app's environment.
+2. Add repository secrets `BILLING_CRON_SECRET` (same value) and `BILLING_APP_URL`.
+3. The workflow also runs from `workflow_dispatch` with an optional `run_date` for backfills.
+
+Without step 1 the route is disabled; without step 2 the workflow fails its first step
+rather than appearing to succeed.
 
 ## Manual Tenant Endpoint
 
@@ -49,7 +87,8 @@ invoices appear, not whether they are ever raised.
 
 ## Idempotency Rules
 
-- Use deterministic `run_key` per schedule window.
+- Use deterministic `run_key` per schedule window. The scheduled run derives its own
+  (`CRON-<JOB_TYPE>-<run_date>`), so a retry of the same day reuses it.
 - `billing_job_runs` has unique `(company_id, job_type, run_key)` to avoid duplicate runs.
 - `billing_transactions` is protected by unique event key (`uq_bt_company_event_key`).
 - Invoice drafts are unique per tenant/client/period (`uq_invoice_header_company_client_period`).

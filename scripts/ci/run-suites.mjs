@@ -15,6 +15,7 @@ import process from "node:process"
 // long chaos suites last.
 const SUITES = [
   "test:billing-cycle",
+  "test:billing-cron",
   "test:locations",
   "test:allocation",
   "test:cycle-count",
