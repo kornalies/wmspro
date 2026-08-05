@@ -11,7 +11,16 @@ import process from "node:process"
 
 const BASE_URL = process.env.WMS_API_BASE_URL || "http://localhost:3000/api"
 const SECRET = process.env.BILLING_CRON_SECRET
-const RUN_DATE = "2099-12-31"
+// Today, deliberately -- exactly what the nightly cron sends.
+//
+// Do NOT put a far-future date here to keep the fixtures "out of the way". The
+// cycle run is catch-up capable: a run_date in 2099 enumerates every closed
+// period up to it, raises real invoices over whatever unbilled charges exist,
+// and the storage snapshot writes a snapshot (and UNRATED storage charges) for
+// that date. An earlier version of this file used 2099-12-31 and filled the dev
+// invoice register with invoices dated 2099. Clean up with
+// scripts/db/clean-test-billing-data.mjs if that ever happens again.
+const RUN_DATE = new Date().toISOString().slice(0, 10)
 
 let failures = 0
 

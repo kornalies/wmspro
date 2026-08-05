@@ -333,16 +333,70 @@ async function scenarioFH5VoidReleasesCharges(token, fixtures) {
   summarizePass("FIN_HARDENING 5")
 }
 
+// Every run used to leave its invoices behind, so a dev database slowly filled
+// with INV-HARD / INV-VOID rows dated 2099 sitting in the finance register next
+// to real ones. They are deleted at the end now, which also keeps the period
+// slots free rather than relying on nextFixturePeriod to keep finding new ones.
+async function cleanupFinanceFixtures(fixtures) {
+  await withDb(async (client) => {
+    await client.query("BEGIN")
+    try {
+      await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      const ids = await client.query(
+        `SELECT id FROM invoice_header
+          WHERE company_id = $1
+            AND (invoice_number LIKE 'INV-HARD-%' OR invoice_number LIKE 'INV-VOID-%')`,
+        [fixtures.tenantA.companyId]
+      )
+      const list = ids.rows.map((r) => r.id)
+      if (list.length) {
+        await client.query(`DELETE FROM invoice_lines WHERE company_id = $1 AND invoice_id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+        await client.query(`DELETE FROM invoice_payments WHERE company_id = $1 AND invoice_id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+      }
+      // The suite's own charges, by their fixture reference. Deleted rather than
+      // released to UNBILLED: they are fixtures, and releasing them would leave
+      // them queued to land on the next real invoice.
+      await client.query(
+        `DELETE FROM billing_transactions
+          WHERE company_id = $1 AND source_ref_no IN ('HARDENING-TX', 'VOID-RELEASE-TX')`,
+        [fixtures.tenantA.companyId]
+      )
+      if (list.length) {
+        await client.query(`DELETE FROM invoice_header WHERE company_id = $1 AND id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+      }
+      await client.query("COMMIT")
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    }
+  })
+}
+
 async function main() {
   const fixtures = await ensureChaosFixtures()
   const token = await login(fixtures.tenantA.code, fixtures.tenantA.username, fixtures.tenantA.password)
   const financeFixture = await createFinanceFixture(fixtures)
 
-  await scenarioFH1DraftIdempotency(token, fixtures)
-  await scenarioFH2FinalizeIdempotency(token, financeFixture.invoiceId)
-  await scenarioFH3PaymentChecks(token, financeFixture.invoiceId)
-  await scenarioFH4UnsafeUnbillBlocked(token, financeFixture.billedTxId)
-  await scenarioFH5VoidReleasesCharges(token, fixtures)
+  try {
+    await scenarioFH1DraftIdempotency(token, fixtures)
+    await scenarioFH2FinalizeIdempotency(token, financeFixture.invoiceId)
+    await scenarioFH3PaymentChecks(token, financeFixture.invoiceId)
+    await scenarioFH4UnsafeUnbillBlocked(token, financeFixture.billedTxId)
+    await scenarioFH5VoidReleasesCharges(token, fixtures)
+  } finally {
+    // In a finally block so a failing scenario still cleans up -- otherwise the
+    // first red run leaves debris that the next run has to work around.
+    await cleanupFinanceFixtures(fixtures)
+  }
   console.log("Finance hardening suite complete")
 }
 

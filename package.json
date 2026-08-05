@@ -13,6 +13,8 @@
     "ci:auth-domain-guard": "node scripts/ci/auth-domain-guard.mjs",
     "db:migrate": "node scripts/db/run-with-env.mjs scripts/db/migrate.mjs",
     "db:seed": "node scripts/db/run-with-env.mjs scripts/db/seed.mjs",
+    "db:clean-test-billing": "node scripts/db/run-with-env.mjs scripts/db/clean-test-billing-data.mjs",
+    "db:clean-test-billing:apply": "node scripts/db/run-with-env.mjs scripts/db/clean-test-billing-data.mjs --apply",
     "db:reconcile-do:dry": "node scripts/db/run-with-env.mjs scripts/db/reconcile-do-quantities.mjs",
     "db:reconcile-do:apply": "node scripts/db/run-with-env.mjs scripts/db/reconcile-do-quantities.mjs --apply",
     "test:chaos": "node scripts/db/run-with-env.mjs tests/chaos/index.mjs",
