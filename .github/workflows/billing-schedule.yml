@@ -13,10 +13,16 @@ name: Billing schedule
 # With either unset the job fails loudly rather than silently doing nothing.
 
 on:
-  schedule:
-    # 00:30 UTC daily. After the day has closed everywhere the tenants operate,
-    # and before the working day starts in IST.
-    - cron: "30 0 * * *"
+  # The daily trigger is deliberately commented out until the two secrets above
+  # exist. Enabled without them, this workflow would fail every night and train
+  # everyone to ignore a red billing job -- which is worse than not having one.
+  # Uncomment the moment BILLING_APP_URL and BILLING_CRON_SECRET are set; that
+  # is the whole activation step.
+  #
+  # schedule:
+  #   # 00:30 UTC daily. After the day has closed everywhere the tenants operate,
+  #   # and before the working day starts in IST.
+  #   - cron: "30 0 * * *"
   workflow_dispatch:
     inputs:
       run_date:

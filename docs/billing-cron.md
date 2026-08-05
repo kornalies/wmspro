@@ -1,8 +1,12 @@
 # Billing Job Schedule
 
-- `00:30` UTC daily, **automated**: `.github/workflows/billing-schedule.yml` calls
+- `00:30` UTC daily: `.github/workflows/billing-schedule.yml` calls
   `POST /api/finance/jobs/scheduled-run`, which runs the storage snapshot and then the
   invoice cycle run for **every active tenant**. See "Scheduled Run" below.
+  **The daily trigger is currently commented out** — the route and the workflow both work,
+  but the schedule stays off until `BILLING_APP_URL` and `BILLING_CRON_SECRET` exist as
+  repository secrets. Until then the run is local/manual (`workflow_dispatch`, or a direct
+  POST), exactly as before, and nothing invoices itself unattended.
 - `00:30` daily/weekly/monthly: operational trigger reconciliation (optional backfill through `/api/finance/billing-transactions`).
 - Per tenant, on demand: `POST /api/finance/jobs/invoice-cycle-run` by a tenant finance user.
   Still supported, and still the way to run one tenant ahead of the schedule.
@@ -36,14 +40,28 @@
   The RUNNING row is committed separately from the work so a crash still leaves evidence.
 - Test: `npm run test:billing-cron` (needs the app running and `BILLING_CRON_SECRET` set).
 
-### Deploying the schedule
+### Running it locally
 
-1. Set `BILLING_CRON_SECRET` in the app's environment.
+`BILLING_CRON_SECRET` in `.env.local` is all the route needs:
+
+```sh
+curl -sS -X POST http://localhost:3000/api/finance/jobs/scheduled-run \
+  -H "Content-Type: application/json" \
+  -H "x-cron-secret: $BILLING_CRON_SECRET" \
+  -d '{}' | jq .
+```
+
+Add `{"company_id": 1}` for a single tenant, or `{"run_date": "2026-07-31"}` to backfill.
+
+### Turning the schedule on later
+
+1. Set `BILLING_CRON_SECRET` in the deployed app's environment.
 2. Add repository secrets `BILLING_CRON_SECRET` (same value) and `BILLING_APP_URL`.
-3. The workflow also runs from `workflow_dispatch` with an optional `run_date` for backfills.
+3. Uncomment the `schedule:` block in `.github/workflows/billing-schedule.yml`.
 
 Without step 1 the route is disabled; without step 2 the workflow fails its first step
-rather than appearing to succeed.
+rather than appearing to succeed. Step 3 is deliberately last — a nightly job that fails
+for weeks because it was enabled early teaches everyone to ignore it.
 
 ## Manual Tenant Endpoint
 
