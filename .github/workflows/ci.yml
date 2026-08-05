@@ -27,7 +27,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+: the location and billing-cycle suites import .ts modules
+          # directly and rely on Node's native type stripping.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -73,10 +75,11 @@ jobs:
     env:
       NODE_ENV: test
       JWT_SECRET: ci-jwt-secret-that-is-long-enough-for-tests
-      # Migrations and the seed run as the owning role; the app and the suites
-      # connect as `wms`, which must stay NOSUPERUSER/NOBYPASSRLS or
-      # ensureSafeDbRole in lib/db.ts refuses every query by design.
-      MIGRATOR_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wms_test?sslmode=disable
+      # Mirrors production's two roles. Neither may be a superuser: the app role
+      # is refused by ensureSafeDbRole in lib/db.ts, and an owner role that is a
+      # superuser makes every view bypass RLS -- which isolation SCENARIO 1.4
+      # checks for explicitly.
+      MIGRATOR_DATABASE_URL: postgresql://wms_migrator:wms_migrator@localhost:5432/wms_test?sslmode=disable
       DATABASE_URL: postgresql://wms:wms@localhost:5432/wms_test?sslmode=disable
       PGSSLMODE: disable
       WMS_COMPANY_CODE: GWU
@@ -95,18 +98,23 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+: the location and billing-cycle suites import .ts modules
+          # directly and rely on Node's native type stripping.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Create application role
+      - name: Create database roles
         env:
           PGPASSWORD: postgres
         run: |
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE wms LOGIN PASSWORD 'wms' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
+            -c "CREATE ROLE wms_migrator LOGIN PASSWORD 'wms_migrator' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
+            -c "CREATE ROLE wms LOGIN PASSWORD 'wms' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
+            -c "ALTER SCHEMA public OWNER TO wms_migrator;" \
+            -c "GRANT ALL ON SCHEMA public TO wms_migrator;"
 
       # db/migrations/001 starts by ALTERing grn_header -- the numbered migrations
       # have never contained the base schema, so `db:migrate` against an empty
@@ -115,18 +123,21 @@ jobs:
       # schema_migrations rows, so the migrator sees 001-068 as already applied
       # and only a PR's *new* migrations actually run here.
       - name: Restore schema baseline
-        env:
-          PGPASSWORD: postgres
         run: |
-          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
+          # Extensions need a superuser, so they go in as postgres.
+          PGPASSWORD=postgres psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
             -f db/baseline/extensions.sql
+          # Everything else is restored as wms_migrator so the tables and views
+          # are owned by a non-superuser, exactly as in production.
+          #
           # The dump emits a bare `CREATE SCHEMA public;` that collides with the
           # schema the image already ships. Strip that one line at restore time
           # rather than editing the generated file, so refreshing the baseline
           # needs no manual fixups.
+          export PGPASSWORD=wms_migrator
           grep -v '^CREATE SCHEMA public;$' db/baseline/schema.sql \
-            | psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q
-          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
+            | psql -h localhost -U wms_migrator -d wms_test -v ON_ERROR_STOP=1 -q
+          psql -h localhost -U wms_migrator -d wms_test -v ON_ERROR_STOP=1 -q \
             -f db/baseline/schema_migrations.sql
 
       - name: Run migrations
