@@ -118,13 +118,14 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          # The dump emits a bare `CREATE SCHEMA public;`, which the image's
-          # default public schema collides with. Drop it rather than editing the
-          # generated file, so refreshing the baseline needs no manual fixups.
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
-            -c "DROP SCHEMA public CASCADE;"
-          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
-            -f db/baseline/schema.sql
+            -f db/baseline/extensions.sql
+          # The dump emits a bare `CREATE SCHEMA public;` that collides with the
+          # schema the image already ships. Strip that one line at restore time
+          # rather than editing the generated file, so refreshing the baseline
+          # needs no manual fixups.
+          grep -v '^CREATE SCHEMA public;$' db/baseline/schema.sql \
+            | psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
             -f db/baseline/schema_migrations.sql
 

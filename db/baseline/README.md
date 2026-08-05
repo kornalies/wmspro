@@ -10,17 +10,19 @@ This directory is the missing half:
 
 | File | Contents |
 | --- | --- |
+| `extensions.sql` | hand-written; `pg_dump --schema=public` does not emit `CREATE EXTENSION`, but the dump needs `pg_trgm` and `uuid-ossp` to already exist |
 | `schema.sql` | `pg_dump --schema-only --no-owner --no-privileges --schema=public` of the live schema |
 | `schema_migrations.sql` | the `schema_migrations` rows, so the migrator treats 001–068 as already applied |
 
 ## Standing up an empty database
 
-The dump emits a bare `CREATE SCHEMA public;`, so drop the server's default one first
-rather than editing the generated file:
+The dump also emits a bare `CREATE SCHEMA public;`, which collides with the schema a
+fresh server already has. Strip that one line rather than editing the generated file:
 
 ```sh
-psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE;"
-psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/baseline/schema.sql
+psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/baseline/extensions.sql
+grep -v '^CREATE SCHEMA public;$' db/baseline/schema.sql \
+  | psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1
 psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/baseline/schema_migrations.sql
 npm run db:migrate   # applies only migrations newer than the baseline
 npm run db:seed
