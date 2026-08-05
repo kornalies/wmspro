@@ -55,7 +55,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        # Matches the server db/baseline was dumped from (pg_dump 18 output can
+        # use syntax an older server rejects).
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -105,6 +107,21 @@ jobs:
         run: |
           psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE wms LOGIN PASSWORD 'wms' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
+
+      # db/migrations/001 starts by ALTERing grn_header -- the numbered migrations
+      # have never contained the base schema, so `db:migrate` against an empty
+      # database fails immediately and a clean install has never been possible
+      # from this repo. db/baseline is a pg_dump of the live schema plus the
+      # schema_migrations rows, so the migrator sees 001-068 as already applied
+      # and only a PR's *new* migrations actually run here.
+      - name: Restore schema baseline
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
+            -f db/baseline/schema.sql
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
+            -f db/baseline/schema_migrations.sql
 
       - name: Run migrations
         run: npm run db:migrate
