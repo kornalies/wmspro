@@ -29,6 +29,129 @@ export async function withDb(fn) {
   }
 }
 
+/**
+ * Delete the throwaway items and DOs a suite created.
+ *
+ * Suites give themselves a dedicated item per scenario so leftover stock cannot
+ * satisfy another scenario's allocation -- which is right, but for a long time
+ * none of them deleted the item afterwards, and the Stock Search screen filled
+ * up with hundreds of "Allocation test ITM-ALLOC-…" rows sitting among real
+ * inventory. Call this from a finally block so a failing run cleans up too.
+ *
+ * Order is dictated by foreign keys, and the two easy ones to miss are gate_out
+ * (raised by a successful dispatch) and billing_transactions (staged by the
+ * outbound trigger) -- both point at the DO and both block deleting it.
+ */
+export async function deleteTestFixtures(client, { companyId, itemIds = [], doIds = [], grnIds = [] }) {
+  await client.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+
+  const items = itemIds.filter(Boolean)
+  const dos = doIds.filter(Boolean)
+  const grns = grnIds.filter(Boolean)
+
+  if (dos.length) {
+    await client.query(`DELETE FROM gate_out WHERE company_id = $1 AND do_header_id = ANY($2::int[])`, [
+      companyId,
+      dos,
+    ])
+    await client.query(
+      `DELETE FROM billing_transactions
+        WHERE company_id = $1 AND source_type = 'DO' AND source_doc_id = ANY($2::int[])`,
+      [companyId, dos]
+    )
+  }
+
+  if (items.length) {
+    // Packed serials reference the serial row, and a load references the pack
+    // unit, so the outbound tail unwinds before the stock it points at. Suites
+    // that exercise the pack screen leave these behind even when they never
+    // reach a load.
+    await client.query(
+      `DELETE FROM outbound_load_pack_units
+        WHERE company_id = $1
+          AND pack_unit_id IN (
+            SELECT pus.pack_unit_id FROM do_pack_unit_serials pus
+             WHERE pus.company_id = $1
+               AND pus.serial_id IN (
+                 SELECT id FROM stock_serial_numbers
+                  WHERE company_id = $1 AND item_id = ANY($2::int[])
+               )
+          )`,
+      [companyId, items]
+    )
+    await client.query(
+      `DELETE FROM do_pack_unit_serials
+        WHERE company_id = $1
+          AND serial_id IN (
+            SELECT id FROM stock_serial_numbers WHERE company_id = $1 AND item_id = ANY($2::int[])
+          )`,
+      [companyId, items]
+    )
+    await client.query(`DELETE FROM stock_movements WHERE company_id = $1 AND item_id = ANY($2::int[])`, [
+      companyId,
+      items,
+    ])
+    await client.query(
+      `DELETE FROM stock_serial_numbers WHERE company_id = $1 AND item_id = ANY($2::int[])`,
+      [companyId, items]
+    )
+  }
+
+  if (dos.length) {
+    await client.query(`DELETE FROM do_pack_units WHERE company_id = $1 AND do_header_id = ANY($2::int[])`, [
+      companyId,
+      dos,
+    ])
+    await client.query(`DELETE FROM do_line_items WHERE company_id = $1 AND do_header_id = ANY($2::int[])`, [
+      companyId,
+      dos,
+    ])
+    await client.query(`DELETE FROM do_header WHERE company_id = $1 AND id = ANY($2::int[])`, [
+      companyId,
+      dos,
+    ])
+  }
+
+  if (grns.length) {
+    // Serials point at grn_line_items, so anything the suite received has to be
+    // gone before the lines are. Deleting a GRN's lines is safe for other suites
+    // that hang stock off "the newest line" -- they simply find an older one.
+    await client.query(
+      `DELETE FROM stock_serial_numbers
+        WHERE company_id = $1
+          AND grn_line_item_id IN (SELECT id FROM grn_line_items WHERE grn_header_id = ANY($2::int[]))`,
+      [companyId, grns]
+    )
+    await client.query(`DELETE FROM grn_line_items WHERE company_id = $1 AND grn_header_id = ANY($2::int[])`, [
+      companyId,
+      grns,
+    ])
+    await client.query(
+      `DELETE FROM billing_transactions
+        WHERE company_id = $1 AND source_type = 'GRN' AND source_doc_id = ANY($2::int[])`,
+      [companyId, grns]
+    )
+    await client.query(`DELETE FROM grn_header WHERE company_id = $1 AND id = ANY($2::int[])`, [
+      companyId,
+      grns,
+    ])
+  }
+
+  if (items.length) {
+    // Any line still pointing at the item would block the delete. By this point
+    // they belong to documents outside the suite's own bookkeeping, so leaving
+    // the item is better than deleting someone else's row.
+    await client.query(
+      `DELETE FROM items
+        WHERE company_id = $1 AND id = ANY($2::int[])
+          AND NOT EXISTS (SELECT 1 FROM do_line_items dl WHERE dl.item_id = items.id)
+          AND NOT EXISTS (SELECT 1 FROM grn_line_items gl WHERE gl.item_id = items.id)
+          AND NOT EXISTS (SELECT 1 FROM stock_serial_numbers s WHERE s.item_id = items.id)`,
+      [companyId, items]
+    )
+  }
+}
+
 async function ensureRbac(client, userId) {
   const permissions = [
     ["admin.users.manage", "Manage Users"],

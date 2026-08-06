@@ -12,7 +12,7 @@
  */
 
 import process from "node:process"
-import { BASE_URL, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
+import { BASE_URL, deleteTestFixtures, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
 
 const SUFFIX = Date.now().toString().slice(-9)
 const BATCH = `LOT-TRACE-${SUFFIX}`
@@ -160,37 +160,11 @@ async function cleanup(seeded) {
       seeded.companyId,
       BATCH,
     ])
-    await db.query(`DELETE FROM stock_movements WHERE company_id = $1 AND item_id = $2`, [
-      seeded.companyId,
-      seeded.itemId,
-    ])
-    await db.query(`DELETE FROM stock_serial_numbers WHERE company_id = $1 AND item_id = $2`, [
-      seeded.companyId,
-      seeded.itemId,
-    ])
-    // Dispatching the released lot raises a gate-out and an outbound charge, both
-    // of which reference the DO. They have to go before it does.
-    await db.query(`DELETE FROM gate_out WHERE company_id = $1 AND do_header_id = $2`, [
-      seeded.companyId,
-      seeded.doId,
-    ])
-    await db.query(
-      `DELETE FROM billing_transactions
-        WHERE company_id = $1 AND source_type = 'DO' AND source_doc_id = $2`,
-      [seeded.companyId, seeded.doId]
-    )
-    await db.query(`DELETE FROM do_line_items WHERE company_id = $1 AND do_header_id = $2`, [
-      seeded.companyId,
-      seeded.doId,
-    ])
-    await db.query(`DELETE FROM do_header WHERE company_id = $1 AND id = $2`, [
-      seeded.companyId,
-      seeded.doId,
-    ])
-    await db.query(`DELETE FROM items WHERE company_id = $1 AND id = $2`, [
-      seeded.companyId,
-      seeded.itemId,
-    ])
+    await deleteTestFixtures(db, {
+      companyId: seeded.companyId,
+      itemIds: [seeded.itemId],
+      doIds: [seeded.doId],
+    })
   })
 }
 

@@ -10,10 +10,15 @@
  */
 
 import process from "node:process"
-import { BASE_URL, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
+import { BASE_URL, deleteTestFixtures, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
 
 const SUFFIX = Date.now().toString().slice(-9)
 const QTY = 3
+
+// Everything this run creates, so the teardown can remove it. Each run used to
+// leave an ITM-DOCS-* and an ITM-GRN-* behind in Stock Search.
+const GRN_ITEM_IDS = []
+const TEARDOWN = { companyId: 0, itemIds: GRN_ITEM_IDS, doIds: [], grnIds: [] }
 
 let failures = 0
 function check(label, condition, extra = "") {
@@ -278,6 +283,7 @@ async function seedGrn(fixtures) {
       )
 
       await db.query("COMMIT")
+      GRN_ITEM_IDS.push(itemId)
       return grnId
     } catch (error) {
       await db.query("ROLLBACK")
@@ -502,10 +508,15 @@ async function checkUiReachability() {
 async function main() {
   const fixtures = await ensureChaosFixtures()
   const token = await login(fixtures)
-  const { doId, doLineId, serialIds, itemCode } = await seedDo(fixtures)
+  const seeded = await seedDo(fixtures)
+  const { doId, doLineId, serialIds, itemCode } = seeded
+  TEARDOWN.companyId = seeded.companyId
+  TEARDOWN.itemIds.push(seeded.itemId)
+  TEARDOWN.doIds.push(seeded.doId)
 
   // ---- inbound: the GRN migrated off its standalone print page -------------
   const grnId = await seedGrn(fixtures)
+  TEARDOWN.grnIds.push(grnId)
   const grn = await assertDocument(token, "goods-receipt-note", "goods-receipt-note", grnId, {
     minRows: 2,
   })
@@ -800,14 +811,25 @@ async function main() {
   check("unauthenticated read rejected", anon.status === 401, `status=${anon.status}`)
 
   console.log("")
+  // Reporting only -- the exit code comes from the finally below, so the run's
+  // throwaway items are removed whether it passed or failed.
   if (failures > 0) {
     console.log(`Documents: ${failures} check(s) failed.`)
-    process.exit(1)
+    return
   }
   console.log("Documents: all checks passed.")
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-})
+main()
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    failures = failures || 1
+  })
+  .finally(async () => {
+    if (TEARDOWN.companyId) {
+      await withDb((db) => deleteTestFixtures(db, TEARDOWN)).catch((error) => {
+        console.error(`cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
+    process.exit(failures ? 1 : 0)
+  })
