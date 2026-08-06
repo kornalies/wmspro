@@ -48,6 +48,33 @@ pg_dump --data-only --no-owner --no-privileges --table=public.schema_migrations 
 Keep the server version and `pg_dump` version aligned with the `postgres:` image the
 CI service uses — newer dumps can emit syntax an older server rejects.
 
+## Running migrations against more than one database
+
+`npm run db:migrate` resolves its targets in this order:
+
+| Source | Meaning |
+| --- | --- |
+| `MIGRATION_TARGETS` | explicit list — `name=url` or bare urls, comma or newline separated |
+| `MIGRATOR_DATABASE_URL` / `DATABASE_URL` | the single shared database (today's normal case) |
+
+```sh
+MIGRATION_TARGETS="acme=postgres://…/acme,globex=postgres://…/globex" npm run db:migrate
+```
+
+Every target keeps its own `schema_migrations`, so they may legitimately sit at different
+versions. **A failing target does not abort the rest** — with a database per tenant, stopping
+at the first error would leave an estate in an unknown mix of versions and no report of which
+is which. Each target is reported, and the command exits non-zero if any failed. Connection
+strings are redacted before they are printed.
+
+The resolution rules are covered by `npm run test:migration-targets` (pure, no database):
+getting them wrong means silently skipping a tenant, which is not a thing that announces
+itself.
+
+Migrations sharing a numeric prefix (`020_`, `031_`) are warned about on every run. They are
+harmless — the runner keys on the full filename and sorts lexicographically — but they are a
+footgun for whoever reads the highest number and picks one that is already taken.
+
 ## What this is not
 
 It is not a rewrite of the migration history, and existing migrations are not tested

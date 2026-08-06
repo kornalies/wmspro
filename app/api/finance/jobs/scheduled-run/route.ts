@@ -3,7 +3,12 @@ import { NextRequest } from "next/server"
 
 import { getClient, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
-import { createStorageSnapshot, generateInvoiceDraftsByBillingCycle } from "@/lib/billing-service"
+import {
+  createStorageSnapshot,
+  generateInvoiceDraftsByBillingCycle,
+  normalizeShard,
+  type BillingShard,
+} from "@/lib/billing-service"
 
 // System entry point for the billing schedule. Every other job route in this
 // folder is session-scoped to the caller's own tenant, which is why nothing was
@@ -50,11 +55,19 @@ export async function POST(request: NextRequest) {
     run_date?: string
     jobs?: string[]
     company_id?: number
+    shard?: { index?: number; count?: number }
   }
 
   const runDate = body.run_date || new Date().toISOString().slice(0, 10)
   if (!isIsoDate(runDate)) {
     return fail("VALIDATION_ERROR", "run_date must be YYYY-MM-DD", 400)
+  }
+
+  let shard: BillingShard | null = null
+  try {
+    shard = normalizeShard(body.shard)
+  } catch (error: unknown) {
+    return fail("VALIDATION_ERROR", error instanceof Error ? error.message : "Invalid shard", 400)
   }
 
   const requested = body.jobs?.length ? body.jobs : ALL_JOBS
@@ -65,7 +78,15 @@ export async function POST(request: NextRequest) {
   // Snapshot before invoicing, always: storage charges for the day have to exist
   // as billing_transactions before the cycle run can sweep them onto an invoice.
   // Running these in the other order silently under-bills storage by one cycle.
-  const jobs = ALL_JOBS.filter((job) => requested.includes(job))
+  let jobs = ALL_JOBS.filter((job) => requested.includes(job))
+
+  // The snapshot is one set-based statement per tenant covering all of its stock,
+  // so it is not shardable and does not need to be. Running it in every shard
+  // would repeat the same work N times; shard 0 owns it, and the other shards do
+  // only the part that actually splits.
+  if (shard && shard.index !== 0) {
+    jobs = jobs.filter((job) => job !== "storage-snapshot")
+  }
 
   const db = await getClient()
   const results: Array<{
@@ -90,7 +111,7 @@ export async function POST(request: NextRequest) {
         // One tenant's failure must not abort the fan-out -- a single tenant with
         // a broken rate card would otherwise stop every later tenant from being
         // invoiced at all, and the run would look like it had simply not happened.
-        const outcome = await runJob(db, job, companyId, runDate)
+        const outcome = await runJob(db, job, companyId, runDate, shard)
         results.push({
           company_id: companyId,
           company_code: String(company.company_code),
@@ -112,6 +133,7 @@ export async function POST(request: NextRequest) {
     {
       run_date: runDate,
       jobs,
+      shard,
       company_count: new Set(results.map((r) => r.company_id)).size,
       failed_count: failures.length,
       results,
@@ -124,9 +146,20 @@ export async function POST(request: NextRequest) {
 
 type DbClient = Awaited<ReturnType<typeof getClient>>
 
-async function runJob(db: DbClient, job: JobName, companyId: number, runDate: string) {
+async function runJob(
+  db: DbClient,
+  job: JobName,
+  companyId: number,
+  runDate: string,
+  shard: BillingShard | null
+) {
   const jobType = job === "storage-snapshot" ? "STORAGE_SNAPSHOT" : "INVOICE_CYCLE_RUN"
-  const runKey = `CRON-${jobType}-${runDate}`
+  // The shard is part of the run key. Without it, shard 1 would see shard 0's
+  // billing_job_runs row for the day, conclude the job had already run, and the
+  // audit trail would record one run where N happened.
+  const runKey = shard
+    ? `CRON-${jobType}-${runDate}-S${shard.index}of${shard.count}`
+    : `CRON-${jobType}-${runDate}`
 
   // The RUNNING row is committed on its own so that a job which throws still
   // leaves a FAILED record behind. Recording it inside the job's transaction
@@ -136,7 +169,7 @@ async function runJob(db: DbClient, job: JobName, companyId: number, runDate: st
       `INSERT INTO billing_job_runs (company_id, job_type, run_key, status, details, created_by)
        VALUES ($1, $2, $3, 'RUNNING', $4::jsonb, NULL)
        ON CONFLICT (company_id, job_type, run_key) DO NOTHING`,
-      [companyId, jobType, runKey, JSON.stringify({ runDate, trigger: "cron" })]
+      [companyId, jobType, runKey, JSON.stringify({ runDate, trigger: "cron", shard })]
     )
   })
 
@@ -151,6 +184,7 @@ async function runJob(db: DbClient, job: JobName, companyId: number, runDate: st
         runDate,
         runKeyPrefix: runKey,
         clientId: null,
+        shard,
       })
     })
 

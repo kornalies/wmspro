@@ -35,6 +35,15 @@
   transaction and reports independently; the response carries `failed_count` and a per-tenant
   `results` array. The workflow inspects the body, because HTTP 200 only means the fan-out
   itself ran.
+- **The run is shardable.** Pass `shard: {index, count}` and the client population splits on
+  `client_id % count`. Slices are disjoint and exhaustive by construction — every client id has
+  exactly one remainder — and the shard is part of the `run_key`, so each shard gets its own
+  `billing_job_runs` row instead of mistaking another shard's row for its own.
+  **Shard 0 alone takes the storage snapshot**: that job is one set-based statement per tenant
+  covering all of its stock, so it does not split and running it in every shard would repeat
+  the same work. The workflow drives shards as a parallel matrix with `fail-fast: false`.
+  At the current scale `shard_count` is 1; raise it when a single pass stops fitting
+  comfortably inside one request.
 - Every tenant/job pair records a `billing_job_runs` row with `run_key`
   `CRON-<JOB_TYPE>-<run_date>` and `details.trigger = "cron"`, marked `SUCCESS` or `FAILED`.
   The RUNNING row is committed separately from the work so a crash still leaves evidence.

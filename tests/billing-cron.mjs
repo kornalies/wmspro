@@ -19,7 +19,7 @@ const SECRET = process.env.BILLING_CRON_SECRET
 // and the storage snapshot writes a snapshot (and UNRATED storage charges) for
 // that date. An earlier version of this file used 2099-12-31 and filled the dev
 // invoice register with invoices dated 2099. Clean up with
-// scripts/db/clean-test-billing-data.mjs if that ever happens again.
+// `npm run db:clean-test-data:apply` if that ever happens again.
 const RUN_DATE = new Date().toISOString().slice(0, 10)
 
 let failures = 0
@@ -96,6 +96,61 @@ check(
   perTenant.length === tenants.size * 2,
   "every tenant ran both jobs",
   `results=${perTenant.length} tenants=${tenants.size}`
+)
+
+console.log("\n== Sharding ==")
+
+// The property that matters is not "sharding runs" but "sharding does not lose
+// or duplicate a client". Asserting the union of the shards equals the unsharded
+// population is the only check that catches an off-by-one in the modulo.
+const unsharded = await post({ run_date: RUN_DATE, jobs: ["invoice-cycle-run"] }, auth)
+const wholeProfiles = (unsharded.json?.data?.results ?? []).reduce(
+  (sum, r) => sum + Number(r.detail?.profileCount ?? 0),
+  0
+)
+
+const shardCount = 3
+let shardedProfiles = 0
+const shardedClients = new Set()
+for (let index = 0; index < shardCount; index++) {
+  const res = await post(
+    { run_date: RUN_DATE, jobs: ["invoice-cycle-run"], shard: { index, count: shardCount } },
+    auth
+  )
+  if (res.status !== 200) {
+    check(false, `shard ${index} runs`, `status=${res.status} ${JSON.stringify(res.json)}`)
+    continue
+  }
+  for (const row of res.json?.data?.results ?? []) {
+    shardedProfiles += Number(row.detail?.profileCount ?? 0)
+    for (const skipped of row.detail?.skipped ?? []) {
+      shardedClients.add(`${row.company_id}:${skipped.clientId}`)
+    }
+  }
+}
+
+check(
+  shardedProfiles === wholeProfiles,
+  "the shards together cover every client exactly once",
+  `sharded=${shardedProfiles} whole=${wholeProfiles}`
+)
+check(
+  shardedClients.size === shardedProfiles,
+  "no client is counted in two shards",
+  `distinct=${shardedClients.size} counted=${shardedProfiles}`
+)
+
+const badShard = await post({ shard: { index: 3, count: 3 } }, auth)
+check(badShard.status === 400, "a shard index outside its count is rejected", `status=${badShard.status}`)
+
+// Shard 0 owns the storage snapshot; the others must not repeat it.
+const shardZero = await post({ run_date: RUN_DATE, shard: { index: 0, count: 2 } }, auth)
+const shardOne = await post({ run_date: RUN_DATE, shard: { index: 1, count: 2 } }, auth)
+check(
+  (shardZero.json?.data?.jobs ?? []).includes("storage-snapshot") &&
+    !(shardOne.json?.data?.jobs ?? []).includes("storage-snapshot"),
+  "only shard 0 takes the storage snapshot",
+  `s0=${JSON.stringify(shardZero.json?.data?.jobs)} s1=${JSON.stringify(shardOne.json?.data?.jobs)}`
 )
 
 console.log("\n== Audit trail ==")

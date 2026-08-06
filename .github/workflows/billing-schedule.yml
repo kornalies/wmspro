@@ -11,6 +11,12 @@ name: Billing schedule
 #   BILLING_APP_URL       e.g. https://wms.example.com  (no trailing slash)
 #   BILLING_CRON_SECRET   must match the deployed app's BILLING_CRON_SECRET
 # With either unset the job fails loudly rather than silently doing nothing.
+#
+# The run is shardable: the client population splits on client_id % shard_count,
+# and each shard is an independent job. At the current scale one shard is right;
+# raise shard_count when a single pass stops fitting comfortably in one request.
+# Shards are disjoint and exhaustive, and shard 0 alone takes the storage
+# snapshot (it is one set-based statement per tenant, so it does not split).
 
 on:
   # The daily trigger is deliberately commented out until the two secrets above
@@ -29,10 +35,46 @@ on:
         description: "Billing date (YYYY-MM-DD). Defaults to today on the server."
         required: false
         type: string
+      shard_count:
+        description: "Split the client population across this many parallel runs."
+        required: false
+        default: "1"
+        type: string
 
 jobs:
-  run-billing-jobs:
+  # One shard per job, in parallel. At four tenants a single run is a few
+  # seconds and SHARD_COUNT stays 1; the matrix exists so raising it is a config
+  # change rather than a rewrite when a single pass stops fitting in one request.
+  #
+  # fail-fast is off deliberately: a failing shard must not cancel the others,
+  # or one bad tenant stops the rest being invoiced — the same rule the route
+  # itself follows per tenant.
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.build.outputs.shards }}
+      count: ${{ steps.build.outputs.count }}
+    steps:
+      - name: Build shard list
+        id: build
+        env:
+          SHARD_COUNT: ${{ inputs.shard_count || '1' }}
+        run: |
+          count="${SHARD_COUNT:-1}"
+          case "$count" in
+            ''|*[!0-9]*) echo "shard_count must be a positive integer"; exit 1 ;;
+          esac
+          [ "$count" -lt 1 ] && { echo "shard_count must be at least 1"; exit 1; }
+          echo "shards=$(seq 0 $((count - 1)) | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+  run-billing-jobs:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
 
     steps:
       - name: Check configuration
@@ -53,12 +95,17 @@ jobs:
           APP_URL: ${{ secrets.BILLING_APP_URL }}
           CRON_SECRET: ${{ secrets.BILLING_CRON_SECRET }}
           RUN_DATE: ${{ inputs.run_date }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ needs.plan.outputs.count }}
         run: |
-          if [ -n "$RUN_DATE" ]; then
-            payload="{\"run_date\":\"$RUN_DATE\"}"
-          else
-            payload="{}"
-          fi
+          payload=$(jq -nc \
+            --arg run_date "$RUN_DATE" \
+            --argjson index "$SHARD_INDEX" \
+            --argjson count "$SHARD_COUNT" \
+            '{}
+             + (if $run_date == "" then {} else {run_date: $run_date} end)
+             + (if $count <= 1 then {} else {shard: {index: $index, count: $count}} end)')
+          echo "Payload: $payload"
 
           # --fail-with-body so a 4xx/5xx fails the step but still prints why.
           response=$(curl --fail-with-body -sS -X POST \
