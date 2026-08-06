@@ -25,6 +25,8 @@ import {
     ArrowLeftRight,
     Boxes,
     History,
+    Scale,
+    Truck,
     Building2,
     FileText,
     Rocket,
@@ -135,6 +137,18 @@ const sections: SidebarSection[] = [
                 icon: Boxes,
                 href: '/stock/lots',
                 color: 'text-lime-400',
+            },
+            {
+                label: 'Stock Transfers',
+                icon: Truck,
+                href: '/stock/transfers',
+                color: 'text-sky-400',
+            },
+            {
+                label: 'Adjustments',
+                icon: Scale,
+                href: '/stock/adjustments',
+                color: 'text-rose-400',
             },
             {
                 label: 'Stock Movements',

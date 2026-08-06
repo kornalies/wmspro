@@ -1521,6 +1521,326 @@ async function buildCycleCountSheet(
 }
 
 // ---------------------------------------------------------------------------
+// Stock transfer note — keyed on a stock_transfer_header id
+//
+// This document travels WITH the stock, so it is written for the person at the
+// receiving dock: what left, what should arrive, and space to record what
+// actually did. Once received it becomes the evidence of any shortfall, which is
+// why sent and received are printed side by side rather than netted.
+// ---------------------------------------------------------------------------
+
+async function buildStockTransferNote(
+  db: DocumentDBClient,
+  companyId: number,
+  transferId: number
+): Promise<DocumentResult> {
+  const res = await db.query(
+    `SELECT h.*, c.client_code, c.client_name,
+            fw.warehouse_code AS from_code, fw.warehouse_name AS from_name,
+            fw.address AS from_address, fw.city AS from_city,
+            tw.warehouse_code AS to_code, tw.warehouse_name AS to_name,
+            tw.address AS to_address, tw.city AS to_city,
+            ua.full_name AS approved_by_name,
+            ud.full_name AS dispatched_by_name,
+            ur.full_name AS received_by_name
+       FROM stock_transfer_header h
+       LEFT JOIN clients c ON c.id = h.client_id AND c.company_id = h.company_id
+       JOIN warehouses fw ON fw.id = h.from_warehouse_id AND fw.company_id = h.company_id
+       JOIN warehouses tw ON tw.id = h.to_warehouse_id AND tw.company_id = h.company_id
+       LEFT JOIN users ua ON ua.id = h.approved_by
+       LEFT JOIN users ud ON ud.id = h.dispatched_by
+       LEFT JOIN users ur ON ur.id = h.received_by
+      WHERE h.company_id = $1 AND h.id = $2
+      LIMIT 1`,
+    [companyId, transferId]
+  )
+  if (!res.rows.length) throw new DocumentNotFoundError("Stock transfer not found")
+  const transfer = res.rows[0]
+
+  const lines = await db.query(
+    `SELECT l.line_number, l.quantity_requested, l.quantity_sent, l.quantity_received,
+            l.uom, l.remarks, i.item_code, i.item_name
+       FROM stock_transfer_lines l
+       JOIN items i ON i.id = l.item_id AND i.company_id = l.company_id
+      WHERE l.company_id = $1 AND l.transfer_id = $2
+      ORDER BY l.line_number`,
+    [companyId, transferId]
+  )
+
+  const dispatched = Boolean(transfer.dispatched_at)
+  const received = Boolean(transfer.received_at)
+  const totalSent = lines.rows.reduce((sum, r) => sum + num(r.quantity_sent), 0)
+  const totalReceived = lines.rows.reduce((sum, r) => sum + num(r.quantity_received), 0)
+  const shortfall = received ? totalSent - totalReceived : 0
+
+  return finalize(
+    db,
+    companyId,
+    transferId,
+    { warehouseId: num(transfer.from_warehouse_id), clientId: num(transfer.client_id) },
+    {
+      type: "stock-transfer-note",
+      title: "Stock Transfer Note",
+      documentNumber: str(transfer.transfer_number),
+      documentDate: fmtDate(transfer.transfer_date),
+      warehouseLabel: str(transfer.from_code),
+      status: statusTone(transfer.status),
+      meta: [
+        { label: "Transfer No.", value: str(transfer.transfer_number) },
+        { label: "Status", value: str(transfer.status) },
+        { label: "Dispatched", value: fmtDateTime(transfer.dispatched_at) },
+        { label: "Received", value: fmtDateTime(transfer.received_at) },
+      ],
+      sections: [
+        {
+          kind: "party-cards",
+          cards: [
+            {
+              title: "Dispatching Warehouse",
+              fields: [
+                { label: "Warehouse", value: str(transfer.from_name) },
+                { label: "Address", value: str(transfer.from_address) },
+                { label: "City", value: str(transfer.from_city) },
+              ],
+            },
+            {
+              title: "Receiving Warehouse",
+              fields: [
+                { label: "Warehouse", value: str(transfer.to_name) },
+                { label: "Address", value: str(transfer.to_address) },
+                { label: "City", value: str(transfer.to_city) },
+              ],
+            },
+            {
+              title: "Stock Owner",
+              fields: [
+                { label: "Client", value: str(transfer.client_name) },
+                { label: "Code", value: str(transfer.client_code) },
+              ],
+            },
+          ],
+        },
+        {
+          kind: "fields",
+          title: "Movement",
+          columns: 3,
+          fields: [
+            { label: "Reason", value: str(transfer.reason) },
+            { label: "Expected Date", value: fmtDate(transfer.expected_date) },
+            { label: "Vehicle", value: str(transfer.vehicle_number) },
+            { label: "Driver", value: str(transfer.driver_name) },
+            { label: "Approved By", value: str(transfer.approved_by_name) },
+            { label: "Dispatched By", value: str(transfer.dispatched_by_name) },
+          ],
+        },
+        {
+          kind: "table",
+          title: "Transfer Lines",
+          caption: received
+            ? "Received quantities as recorded at the destination"
+            : "Receiving warehouse: record the quantity actually received against each line",
+          emptyText: "No lines on this transfer.",
+          columns: [
+            { key: "seq", label: "#", width: "5%", align: "right" },
+            { key: "code", label: "Item Code", width: "18%", mono: true },
+            { key: "name", label: "Description", width: "33%" },
+            { key: "uom", label: "UOM", width: "8%" },
+            { key: "requested", label: "Requested", width: "10%", align: "right" },
+            { key: "sent", label: "Sent", width: "10%", align: "right" },
+            // Left blank before receipt: the destination writes it in, and
+            // pre-printing the sent quantity here would invite a tick rather than
+            // a count.
+            { key: "received", label: "Received", width: "10%", align: "right" },
+            { key: "variance", label: "Short", width: "6%", align: "right" },
+          ],
+          rows: lines.rows.map((row, index) => ({
+            seq: index + 1,
+            code: str(row.item_code),
+            name: str(row.item_name),
+            uom: str(row.uom),
+            requested: num(row.quantity_requested),
+            sent: dispatched ? num(row.quantity_sent) : "",
+            received: received ? num(row.quantity_received) : "",
+            variance: received ? num(row.quantity_sent) - num(row.quantity_received) || "" : "",
+          })),
+        },
+        {
+          kind: "summary-tiles",
+          tiles: [
+            { label: "Lines", value: String(lines.rows.length) },
+            { label: "Units Sent", value: dispatched ? String(totalSent) : "—" },
+            { label: "Units Received", value: received ? String(totalReceived) : "—" },
+            { label: "Short", value: received ? String(shortfall) : "—" },
+          ],
+        },
+        ...(shortfall > 0
+          ? [
+              {
+                kind: "notes" as const,
+                title: "Discrepancy",
+                text: `${shortfall} unit(s) despatched from ${str(
+                  transfer.from_name
+                )} were not received at ${str(
+                  transfer.to_name
+                )}. These units remain in transit in the system and must be resolved by an inventory adjustment.`,
+              },
+            ]
+          : []),
+        ...(str(transfer.remarks, "")
+          ? [{ kind: "notes" as const, title: "Remarks", text: str(transfer.remarks) }]
+          : []),
+        terms(),
+        signatures("Prepared By", "Dispatched By", "Transporter", "Received By"),
+      ],
+      footerNote:
+        "Goods remain the property of the stock owner throughout. The receiving warehouse must record actual quantities; unrecorded shortfalls stay in transit.",
+    }
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Inventory adjustment report — keyed on an inventory_adjustment_header id
+//
+// The audit document for stock that changed without being received or shipped.
+// It prints the serial numbers rather than only quantities, because "12 units
+// written off" is not evidence and "these 12 units" is.
+// ---------------------------------------------------------------------------
+
+async function buildInventoryAdjustmentReport(
+  db: DocumentDBClient,
+  companyId: number,
+  adjustmentId: number
+): Promise<DocumentResult> {
+  const res = await db.query(
+    `SELECT h.*, c.client_code, c.client_name, w.warehouse_code, w.warehouse_name,
+            uc.full_name AS created_by_name,
+            ua.full_name AS approved_by_name,
+            ur.full_name AS rejected_by_name
+       FROM inventory_adjustment_header h
+       LEFT JOIN clients c ON c.id = h.client_id AND c.company_id = h.company_id
+       JOIN warehouses w ON w.id = h.warehouse_id AND w.company_id = h.company_id
+       LEFT JOIN users uc ON uc.id = h.created_by
+       LEFT JOIN users ua ON ua.id = h.approved_by
+       LEFT JOIN users ur ON ur.id = h.rejected_by
+      WHERE h.company_id = $1 AND h.id = $2
+      LIMIT 1`,
+    [companyId, adjustmentId]
+  )
+  if (!res.rows.length) throw new DocumentNotFoundError("Inventory adjustment not found")
+  const adjustment = res.rows[0]
+
+  const lines = await db.query(
+    `SELECT l.line_number, l.direction, l.quantity, l.batch_number, l.expiry_date,
+            l.bin_location, l.remarks, i.item_code, i.item_name, i.uom,
+            (SELECT string_agg(s.serial_number, ', ' ORDER BY s.serial_number)
+               FROM inventory_adjustment_serials s WHERE s.adjustment_line_id = l.id) AS serials
+       FROM inventory_adjustment_lines l
+       JOIN items i ON i.id = l.item_id AND i.company_id = l.company_id
+      WHERE l.company_id = $1 AND l.adjustment_id = $2
+      ORDER BY l.line_number`,
+    [companyId, adjustmentId]
+  )
+
+  const decreased = lines.rows
+    .filter((r) => str(r.direction) === "DECREASE")
+    .reduce((sum, r) => sum + num(r.quantity), 0)
+  const increased = lines.rows
+    .filter((r) => str(r.direction) === "INCREASE")
+    .reduce((sum, r) => sum + num(r.quantity), 0)
+  const applied = str(adjustment.status) === "APPROVED"
+
+  return finalize(
+    db,
+    companyId,
+    adjustmentId,
+    { warehouseId: num(adjustment.warehouse_id), clientId: num(adjustment.client_id) },
+    {
+      type: "inventory-adjustment-report",
+      title: "Inventory Adjustment Report",
+      documentNumber: str(adjustment.adjustment_number),
+      documentDate: fmtDate(adjustment.adjustment_date),
+      warehouseLabel: str(adjustment.warehouse_code),
+      status: statusTone(adjustment.status),
+      meta: [
+        { label: "Adjustment No.", value: str(adjustment.adjustment_number) },
+        { label: "Reason Code", value: str(adjustment.reason_code) },
+        { label: "Origin", value: str(adjustment.source_module) },
+        { label: "Reference", value: str(adjustment.reference_no) },
+      ],
+      sections: [
+        {
+          kind: "fields",
+          title: "Adjustment",
+          columns: 3,
+          fields: [
+            { label: "Warehouse", value: str(adjustment.warehouse_name) },
+            {
+              label: "Client",
+              value: `${str(adjustment.client_code, "")} ${str(adjustment.client_name)}`.trim(),
+            },
+            { label: "Raised By", value: str(adjustment.created_by_name) },
+            { label: "Approved By", value: str(adjustment.approved_by_name) },
+            { label: "Approved At", value: fmtDateTime(adjustment.approved_at) },
+            { label: "Reason", value: str(adjustment.reason) },
+          ],
+        },
+        {
+          kind: "table",
+          title: "Adjustment Lines",
+          // The serial column is the point of the document: a quantity alone
+          // cannot be audited back to the stock it removed.
+          caption: "Serial numbers are listed so each unit can be traced",
+          emptyText: "No lines on this adjustment.",
+          columns: [
+            { key: "seq", label: "#", width: "4%", align: "right" },
+            { key: "direction", label: "Direction", width: "10%" },
+            { key: "code", label: "Item Code", width: "14%", mono: true },
+            { key: "name", label: "Description", width: "20%" },
+            { key: "batch", label: "Batch", width: "10%", mono: true },
+            { key: "qty", label: "Qty", width: "6%", align: "right" },
+            { key: "serials", label: "Serial Numbers", width: "36%", mono: true },
+          ],
+          rows: lines.rows.map((row, index) => ({
+            seq: index + 1,
+            direction: str(row.direction) === "DECREASE" ? "Write-off" : "Addition",
+            code: str(row.item_code),
+            name: str(row.item_name),
+            batch: str(row.batch_number),
+            qty: num(row.quantity),
+            serials: str(row.serials),
+          })),
+        },
+        {
+          kind: "summary-tiles",
+          tiles: [
+            { label: "Units Written Off", value: String(decreased) },
+            { label: "Units Added", value: String(increased) },
+            { label: "Net Change", value: String(increased - decreased) },
+            { label: "Stock Updated", value: applied ? "Yes" : "No — pending approval" },
+          ],
+        },
+        ...(str(adjustment.rejection_reason, "")
+          ? [
+              {
+                kind: "notes" as const,
+                title: "Rejected",
+                text: `${str(adjustment.rejection_reason)} — rejected by ${str(
+                  adjustment.rejected_by_name
+                )} on ${fmtDateTime(adjustment.rejected_at)}. Stock was not changed.`,
+              },
+            ]
+          : []),
+        terms(),
+        signatures("Raised By", "Verified By", "Approved By", "Client Acknowledgement"),
+      ],
+      footerNote: applied
+        ? "Stock records were updated on approval. Each serial listed above carries a corresponding stock movement."
+        : "This adjustment has NOT been applied to stock. Quantities shown are proposed until approved.",
+    }
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Commercial invoice — keyed on an invoice_header id
 // ---------------------------------------------------------------------------
 
@@ -1956,6 +2276,8 @@ const BUILDERS: Partial<
   "consignment-note": buildConsignmentNote,
   "gate-pass": buildGatePass,
   "cycle-count-sheet": buildCycleCountSheet,
+  "stock-transfer-note": buildStockTransferNote,
+  "inventory-adjustment-report": buildInventoryAdjustmentReport,
   "dispatch-manifest": buildDispatchManifest,
   "commercial-invoice": buildCommercialInvoice,
   "job-card": buildJobCard,
@@ -1971,7 +2293,17 @@ export function isBuildableDocumentType(type: DocumentType): boolean {
 /** What the `[id]` segment refers to, per document type. */
 export const DOCUMENT_SUBJECT: Record<
   DocumentType,
-  "wave" | "do" | "goods-issue" | "load" | "delivery-note" | "grn" | "gate-out" | "count-plan" | "invoice"
+  | "wave"
+  | "do"
+  | "goods-issue"
+  | "load"
+  | "delivery-note"
+  | "grn"
+  | "gate-out"
+  | "count-plan"
+  | "invoice"
+  | "stock-transfer"
+  | "adjustment"
 > = {
   "pick-list": "wave",
   "packing-list": "do",
@@ -1981,6 +2313,8 @@ export const DOCUMENT_SUBJECT: Record<
   "consignment-note": "load",
   "gate-pass": "gate-out",
   "cycle-count-sheet": "count-plan",
+  "stock-transfer-note": "stock-transfer",
+  "inventory-adjustment-report": "adjustment",
   "dispatch-manifest": "load",
   "commercial-invoice": "invoice",
   "job-card": "do",

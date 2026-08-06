@@ -49,6 +49,10 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   // button on the same page is gated separately by the API, which requires
   // stock.putaway.manage like every other stock mutation.
   { href: "/stock/lots", permissions: ["reports.view"] },
+  // Both screens raise and approve stock changes, so they take the stock
+  // mutation permission rather than the reporting one.
+  { href: "/stock/transfers", permissions: ["stock.putaway.manage"] },
+  { href: "/stock/adjustments", permissions: ["stock.putaway.manage"] },
   { href: "/gate/in", permissions: ["gate.in.create"] },
   { href: "/gate/out", permissions: ["gate.out.create"] },
   { href: "/admin/onboarding", permissions: ["master.data.manage", "admin.users.manage", "admin.companies.manage"] },

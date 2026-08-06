@@ -31,6 +31,8 @@ export type DocumentType =
   | "job-card"
   | "dispatch-note"
   | "packing-slip"
+  | "stock-transfer-note"
+  | "inventory-adjustment-report"
 
 export const DOCUMENT_TYPES: DocumentType[] = [
   "pick-list",
@@ -46,6 +48,8 @@ export const DOCUMENT_TYPES: DocumentType[] = [
   "job-card",
   "dispatch-note",
   "packing-slip",
+  "stock-transfer-note",
+  "inventory-adjustment-report",
 ]
 
 export function isDocumentType(value: string): value is DocumentType {

@@ -19,6 +19,7 @@ const SUITES = [
   "test:locations",
   "test:allocation",
   "test:lots",
+  "test:stock-docs",
   "test:cycle-count",
   "test:documents",
   "test:outbound-tail",

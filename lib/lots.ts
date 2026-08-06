@@ -38,14 +38,17 @@ export function normalizeBatchStatus(value: unknown): BatchStatus | null {
 }
 
 /**
- * Stock states that count as "still in my building".
+ * Stock states that count as "still recoverable by us".
  *
  * DISPATCHED stock has left and is the recall's outbound half; CANCELLED stock
- * was written off and is neither. Keeping this in one constant stops the
- * on-hand figure in the lot list disagreeing with the on-hand figure in the
- * recall report.
+ * was written off and is neither. IN_TRANSIT stock is on a truck between our own
+ * warehouses (migration 070) — still ours, still stoppable, so it belongs here
+ * rather than in the shipped half.
+ *
+ * Keeping this in one constant stops the on-hand figure in the lot list
+ * disagreeing with the on-hand figure in the recall report.
  */
-const ON_HAND_STATUSES = "('IN_STOCK', 'RESERVED', 'QC_HOLD', 'DAMAGED')"
+const ON_HAND_STATUSES = "('IN_STOCK', 'RESERVED', 'IN_TRANSIT')"
 
 /**
  * A lot master row. The index signature is honest: the query returns more

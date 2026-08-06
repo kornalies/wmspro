@@ -116,6 +116,24 @@ const SOURCES: Record<DocumentType, SummarySource> = {
     statusColumn: "status",
     hasWarehouse: true,
   },
+  "stock-transfer-note": {
+    title: "Stock Transfer Note",
+    table: "stock_transfer_header",
+    numberColumn: "transfer_number",
+    // Dispatch date first: for a note travelling with the stock, the date that
+    // matters to whoever scans it is when the goods left.
+    dateColumns: ["dispatched_at", "transfer_date", "created_at"],
+    statusColumn: "status",
+    hasWarehouse: false,
+  },
+  "inventory-adjustment-report": {
+    title: "Inventory Adjustment Report",
+    table: "inventory_adjustment_header",
+    numberColumn: "adjustment_number",
+    dateColumns: ["approved_at", "adjustment_date", "created_at"],
+    statusColumn: "status",
+    hasWarehouse: true,
+  },
   "dispatch-manifest": {
     title: "Dispatch Manifest",
     table: "outbound_loads",
