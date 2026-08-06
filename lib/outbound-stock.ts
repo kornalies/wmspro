@@ -14,6 +14,7 @@
  */
 
 import {
+  allocatableBatchPredicate,
   allocatableStockPredicate,
   allocationOrderBy,
   normalizeAllocationRule,
@@ -121,8 +122,12 @@ export async function commitDoLineStock(
     // Distinguish "no stock" from "stock exists but is not allocatable".
     // Reporting a bare shortage when the real cause is expiry sends a supervisor
     // hunting for inventory that is sitting right there, blocked on purpose.
+    // Counted in two buckets, because they need different actions: dates are a
+    // planning problem, a held batch is someone's decision that has to be lifted
+    // before this stock moves at all.
     const blocked = await db.query(
-      `SELECT COUNT(*)::int AS n
+      `SELECT COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE NOT (${allocatableBatchPredicate("s")}))::int AS held
        FROM stock_serial_numbers s
        JOIN items i ON i.id = s.item_id AND i.company_id = s.company_id
        WHERE s.warehouse_id = $1
@@ -137,10 +142,16 @@ export async function commitDoLineStock(
       [warehouseId, clientId, itemId, companyId, doLineItemId]
     )
     const blockedCount = Number(blocked.rows[0]?.n ?? 0)
+    const heldCount = Number(blocked.rows[0]?.held ?? 0)
+    const reasons: string[] = []
+    if (blockedCount - heldCount > 0) {
+      reasons.push(`${blockedCount - heldCount} expired or inside the minimum shelf life`)
+    }
+    if (heldCount > 0) reasons.push(`${heldCount} in a held or recalled batch`)
     throw new OutboundStockError(
       "INVENTORY_VALIDATION_FAILED",
       blockedCount > 0
-        ? `Insufficient allocatable inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}. ${blockedCount} unit(s) are excluded as expired or inside the minimum shelf life.`
+        ? `Insufficient allocatable inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}. ${blockedCount} unit(s) are excluded: ${reasons.join("; ")}.`
         : `Insufficient inventory for item ${itemId}. Required ${quantity}, available ${serialIds.length}.`
     )
   }

@@ -18,6 +18,7 @@ const SUITES = [
   "test:billing-cron",
   "test:locations",
   "test:allocation",
+  "test:lots",
   "test:cycle-count",
   "test:documents",
   "test:outbound-tail",

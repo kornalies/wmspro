@@ -40,6 +40,7 @@
     "test:cycle-count": "node scripts/db/run-with-env.mjs tests/cycle-count.mjs",
     "test:allocation": "node scripts/db/run-with-env.mjs tests/allocation.mjs",
     "test:locations": "node scripts/db/run-with-env.mjs tests/location-generator.mjs",
+    "test:lots": "node scripts/db/run-with-env.mjs tests/lots.mjs",
     "test:billing-cycle": "node tests/billing-cycle.mjs",
     "test:billing-cron": "node scripts/db/run-with-env.mjs tests/billing-cron.mjs",
     "test:suites": "node scripts/ci/run-suites.mjs"

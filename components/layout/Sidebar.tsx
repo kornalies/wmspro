@@ -23,6 +23,7 @@ import {
     ClipboardCheck,
     Rows3,
     ArrowLeftRight,
+    Boxes,
     History,
     Building2,
     FileText,
@@ -128,6 +129,12 @@ const sections: SidebarSection[] = [
                 icon: ClipboardList,
                 href: '/stock/cycle-counts',
                 color: 'text-emerald-400',
+            },
+            {
+                label: 'Lot Master',
+                icon: Boxes,
+                href: '/stock/lots',
+                color: 'text-lime-400',
             },
             {
                 label: 'Stock Movements',
