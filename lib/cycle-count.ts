@@ -244,7 +244,8 @@ export async function applyVariance(
     for (const serial of serials.rows) {
       await db.query(
         `UPDATE stock_serial_numbers
-         SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+         SET status = 'CANCELLED', do_line_item_id = NULL, transfer_line_id = NULL,
+             updated_at = CURRENT_TIMESTAMP
          WHERE company_id = $1 AND id = $2`,
         [args.companyId, num(serial.id)]
       )

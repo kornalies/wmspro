@@ -1541,6 +1541,7 @@ async function buildStockTransferNote(
             tw.warehouse_code AS to_code, tw.warehouse_name AS to_name,
             tw.address AS to_address, tw.city AS to_city,
             ua.full_name AS approved_by_name,
+            up.full_name AS picked_by_name,
             ud.full_name AS dispatched_by_name,
             ur.full_name AS received_by_name
        FROM stock_transfer_header h
@@ -1548,6 +1549,7 @@ async function buildStockTransferNote(
        JOIN warehouses fw ON fw.id = h.from_warehouse_id AND fw.company_id = h.company_id
        JOIN warehouses tw ON tw.id = h.to_warehouse_id AND tw.company_id = h.company_id
        LEFT JOIN users ua ON ua.id = h.approved_by
+       LEFT JOIN users up ON up.id = h.picked_by
        LEFT JOIN users ud ON ud.id = h.dispatched_by
        LEFT JOIN users ur ON ur.id = h.received_by
       WHERE h.company_id = $1 AND h.id = $2
@@ -1630,6 +1632,10 @@ async function buildStockTransferNote(
             { label: "Vehicle", value: str(transfer.vehicle_number) },
             { label: "Driver", value: str(transfer.driver_name) },
             { label: "Approved By", value: str(transfer.approved_by_name) },
+            // Who found the stock is a different accountability from who
+            // authorised it or who sent it, and a short receipt makes the
+            // difference matter.
+            { label: "Picked By", value: str(transfer.picked_by_name) },
             { label: "Dispatched By", value: str(transfer.dispatched_by_name) },
           ],
         },

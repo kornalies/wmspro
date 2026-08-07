@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
 
     const serial = await db.query(
       `SELECT s.id, s.serial_number, s.item_id, s.status, s.warehouse_id, s.client_id,
-              s.bin_location, s.lp_record_id,
+              s.bin_location, s.lp_record_id, s.transfer_line_id,
               i.item_code, i.item_name,
               pus.pack_unit_id
        FROM stock_serial_numbers s
@@ -89,12 +89,19 @@ export async function POST(request: NextRequest) {
       const row = serial.rows[0]
       const status = String(row.status)
       const alreadyPacked = row.pack_unit_id != null
+      // Held for a stock transfer: still IN_STOCK because it has not moved, so
+      // the status alone does not say it is spoken for. The pack endpoint
+      // refuses it either way; saying so here stops the handheld offering a
+      // scan that is going to be rejected.
+      const heldForTransfer = row.transfer_line_id != null
       await db.query("COMMIT")
       return ok({
         match: "SERIAL",
         serial: row,
-        can_pack: !alreadyPacked && (status === "IN_STOCK" || status === "RESERVED"),
+        can_pack:
+          !alreadyPacked && !heldForTransfer && (status === "IN_STOCK" || status === "RESERVED"),
         already_packed: alreadyPacked,
+        held_for_transfer: heldForTransfer,
       })
     }
 

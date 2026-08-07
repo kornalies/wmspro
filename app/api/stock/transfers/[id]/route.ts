@@ -6,11 +6,13 @@ import { fail, ok } from "@/lib/api-response"
 import { writeAudit } from "@/lib/audit"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireFeature } from "@/lib/policy/guards"
+import { getTransferSeparateApprover } from "@/lib/company-settings"
 import {
   StockTransferError,
   approveTransfer,
   cancelTransfer,
   dispatchTransfer,
+  pickTransfer,
   receiveTransfer,
 } from "@/lib/stock-transfer"
 
@@ -111,7 +113,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const body = (await request.json().catch(() => ({}))) as {
       action?: string
+      picked_serial_ids?: number[]
       received_serial_ids?: number[]
+      vehicle_number?: string
+      driver_name?: string
       remarks?: string
     }
     const action = String(body.action ?? "").toLowerCase()
@@ -124,13 +129,32 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     switch (action) {
       case "approve": {
-        const transfer = await approveTransfer(db, session.companyId, transferId, session.userId)
+        // Approving is the one action that is not just workflow: since migration
+        // 072 it places a real hold on inventory, so it carries its own
+        // permission rather than the operator-level one the rest share.
+        requirePermission(session, "stock.transfer.approve")
+        const transfer = await approveTransfer(db, session.companyId, transferId, session.userId, {
+          requireSeparateApprover: await getTransferSeparateApprover(db, session.companyId),
+        })
         result = { transfer }
         message = `Transfer ${transfer.transfer_number} approved`
         break
       }
+      case "pick": {
+        const out = await pickTransfer(db, session.companyId, transferId, {
+          serialIds: body.picked_serial_ids ?? null,
+          userId: session.userId,
+        })
+        result = { transfer: out.transfer, picked: out.picked }
+        message = `Transfer ${out.transfer.transfer_number} picked — ${out.picked} unit(s) staged for dispatch`
+        break
+      }
       case "dispatch": {
-        const out = await dispatchTransfer(db, session.companyId, transferId, session.userId)
+        const out = await dispatchTransfer(db, session.companyId, transferId, {
+          vehicleNumber: body.vehicle_number ?? null,
+          driverName: body.driver_name ?? null,
+          userId: session.userId,
+        })
         result = { transfer: out.transfer, sent: out.sent }
         message = `Transfer ${out.transfer.transfer_number} dispatched — ${out.sent} unit(s) in transit`
         break
@@ -142,20 +166,28 @@ export async function POST(request: NextRequest, context: RouteContext) {
           userId: session.userId,
         })
         result = { transfer: out.transfer, received: out.received, short: out.short }
+        // Received stock has no bin yet, and the next action is a put-away. Say
+        // so here rather than leaving the operator to discover it.
         message = out.short
-          ? `Transfer received short — ${out.received} arrived, ${out.short} did not`
-          : `Transfer ${out.transfer.transfer_number} received in full`
+          ? `Transfer received short — ${out.received} arrived, ${out.short} did not. ${out.received} unit(s) are awaiting put-away.`
+          : `Transfer ${out.transfer.transfer_number} received in full — ${out.received} unit(s) awaiting put-away`
         break
       }
       case "cancel": {
-        const transfer = await cancelTransfer(db, session.companyId, transferId, session.userId)
-        result = { transfer }
-        message = `Transfer ${transfer.transfer_number} cancelled`
+        const out = await cancelTransfer(db, session.companyId, transferId, session.userId)
+        result = { transfer: out.transfer, released: out.released }
+        message = out.released
+          ? `Transfer ${out.transfer.transfer_number} cancelled — ${out.released} unit(s) released back to stock`
+          : `Transfer ${out.transfer.transfer_number} cancelled`
         break
       }
       default:
         await db.query("ROLLBACK")
-        return fail("VALIDATION_ERROR", "action must be approve, dispatch, receive or cancel", 400)
+        return fail(
+          "VALIDATION_ERROR",
+          "action must be approve, pick, dispatch, receive or cancel",
+          400
+        )
     }
 
     await writeAudit(

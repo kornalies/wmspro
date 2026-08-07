@@ -92,6 +92,27 @@ export function buildStockSearchFilters(
   return { whereClause: `WHERE ${where.join(" AND ")}`, params }
 }
 
+/**
+ * Where a unit is, as one expression.
+ *
+ * The naive form — `COALESCE(bin_location, CONCAT(zone, '/', rack, '/', bin),
+ * 'Unassigned')` — never reaches its fallback, because Postgres CONCAT renders
+ * NULL as an empty string: unlocated stock came out as the string `'//'`, which
+ * every screen then displayed verbatim. StockSearch.tsx still carries a
+ * `location === "//"` workaround from the first time someone hit this.
+ *
+ * CONCAT_WS skips NULLs and the outer NULLIF turns the all-null case back into
+ * NULL so COALESCE can do its job. Exported because four queries need it and
+ * three of them had drifted into the broken version.
+ */
+export function binLocationExpr(ssnAlias = "ssn", zlAlias = "zl"): string {
+  return `COALESCE(
+      NULLIF(${ssnAlias}.bin_location, ''),
+      NULLIF(CONCAT_WS('/', NULLIF(${zlAlias}.zone_code, ''), NULLIF(${zlAlias}.rack_code, ''), NULLIF(${zlAlias}.bin_code, '')), ''),
+      'Unassigned'
+    )`
+}
+
 /** Full serial-row projection used by the drill-down and export queries. */
 export const STOCK_SERIAL_SELECT = `
     ssn.id,
@@ -108,11 +129,7 @@ export const STOCK_SERIAL_SELECT = `
     COALESCE(zl.zone_name, 'Unassigned') AS zone_name,
     zl.rack_name,
     zl.bin_name,
-    COALESCE(
-      NULLIF(ssn.bin_location, ''),
-      NULLIF(CONCAT_WS('/', NULLIF(zl.zone_code, ''), NULLIF(zl.rack_code, ''), NULLIF(zl.bin_code, '')), ''),
-      'Unassigned'
-    ) AS bin_location,
+    ${binLocationExpr()} AS bin_location,
     COALESCE(lpdir.lp_code, lp.lp_code) AS lp_code`
 
 /** Joins backing {@link STOCK_SERIAL_SELECT}. */

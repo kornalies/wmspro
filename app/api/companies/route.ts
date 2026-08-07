@@ -42,6 +42,9 @@ const updateCompanySchema = z.object({
       // When outbound handling revenue is recognised. Absent = DISPATCH, which
       // is the pre-Track-A behaviour. See lib/company-settings.ts.
       outbound_billing_trigger: z.enum(["DISPATCH", "GOODS_ISSUE"]).optional(),
+      // Require a stock transfer to be approved by someone other than its
+      // raiser. Absent = off, which is the behaviour before migration 075.
+      transfer_separate_approver: z.boolean().optional(),
     })
     .optional(),
 })

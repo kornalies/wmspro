@@ -209,7 +209,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     // and never re-tests them. The dispatch path has always refused such stock
     // (commitDoLineStock applies the same predicate), so the two paths disagreed.
     const serialRows = await db.query(
-      `SELECT s.id, s.item_id, s.status, s.do_line_item_id,
+      `SELECT s.id, s.item_id, s.status, s.do_line_item_id, s.transfer_line_id,
               to_char(s.expiry_date, 'YYYY-MM-DD') AS expiry_date_text,
               (s.expiry_date IS NOT NULL AND s.expiry_date < CURRENT_DATE) AS is_expired,
               i.min_shelf_life_days,
@@ -236,6 +236,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       item_id: unknown
       status: unknown
       do_line_item_id: unknown
+      transfer_line_id: unknown
       expiry_date_text: unknown
       is_expired: unknown
       min_shelf_life_days: unknown
@@ -262,6 +263,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
           return fail(
             "WORKFLOW_BLOCKED",
             `Serial ${serialId} is ${status} and cannot be packed`,
+            409
+          )
+        }
+        // Held for a stock transfer. The unit is still IN_STOCK because it has
+        // not moved, so the status check above cannot catch this -- and packing
+        // it would leave the approved transfer short at dispatch.
+        if (serial?.transfer_line_id != null) {
+          await db.query("ROLLBACK")
+          return fail(
+            "WORKFLOW_BLOCKED",
+            `Serial ${serialId} is reserved for a stock transfer and cannot be packed`,
             409
           )
         }

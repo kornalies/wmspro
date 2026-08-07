@@ -6,6 +6,7 @@ import { getClient, query, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { ensurePutawayMovementSchema } from "@/lib/db-bootstrap"
 import { ensureWarehouseZone } from "@/lib/warehouse-zones"
+import { binLocationExpr } from "@/lib/stock-search"
 import { writeAudit } from "@/lib/audit"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import {
@@ -55,9 +56,19 @@ export async function GET(request: NextRequest) {
     const clientId = Number(searchParams.get("client_id") || 0)
     const fromZoneLayoutId = Number(searchParams.get("from_zone_layout_id") || 0)
 
+    // Stock that has no location at all. This is the queue that matters after a
+    // transfer or a receipt: everything else in the list already has a home and
+    // is only being moved. Without the filter the newly arrived units are a
+    // handful of rows inside a 300-row list of the whole warehouse.
+    const unlocatedOnly = searchParams.get("unlocated") === "true"
+
     const where: string[] = ["ssn.warehouse_id = $1", "ssn.status = 'IN_STOCK'"]
     const params: Array<string | number> = [warehouseId]
     let idx = 2
+
+    if (unlocatedOnly) {
+      where.push(`ssn.zone_layout_id IS NULL AND NULLIF(ssn.bin_location, '') IS NULL`)
+    }
 
     if (serial) {
       where.push(`ssn.serial_number ILIKE $${idx++}`)
@@ -89,12 +100,30 @@ export async function GET(request: NextRequest) {
         c.client_name,
         w.warehouse_name,
         ssn.zone_layout_id,
-        COALESCE(ssn.bin_location, CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code), 'Unassigned') AS current_bin_location
+        ${binLocationExpr()} AS current_bin_location,
+        -- Where this unit came from, when it came from another warehouse of
+        -- ours. A put-away operator treats a transfer arrival differently from
+        -- stock that has been sitting in the building for a month, and the
+        -- received_date cannot tell them apart: it is the ORIGINAL receipt date
+        -- and deliberately survives the transfer.
+        stn.transfer_number AS arrived_on_transfer,
+        stn.received_at AS arrived_at
       FROM stock_serial_numbers ssn
       JOIN items i ON i.id = ssn.item_id
       JOIN clients c ON c.id = ssn.client_id
       JOIN warehouses w ON w.id = ssn.warehouse_id
       LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id
+      LEFT JOIN LATERAL (
+        SELECT h.transfer_number, h.received_at
+          FROM stock_transfer_serials sts
+          JOIN stock_transfer_header h
+            ON h.id = sts.transfer_id AND h.company_id = sts.company_id
+         WHERE sts.company_id = ssn.company_id
+           AND sts.serial_id = ssn.id
+           AND sts.received
+         ORDER BY h.received_at DESC NULLS LAST
+         LIMIT 1
+      ) stn ON true
       WHERE ${where.join(" AND ")}
       ORDER BY ssn.received_date ASC, ssn.id ASC
       LIMIT 300`,

@@ -139,8 +139,25 @@ export function allocatableBatchPredicate(alias = "s"): string {
 export function reservableStockPredicate(alias = "s", lineExpr = "$1"): string {
   return `(
     (${alias}.status = 'RESERVED' AND ${alias}.do_line_item_id = ${lineExpr})
-    OR (${alias}.status = 'IN_STOCK' AND ${alias}.do_line_item_id IS NULL)
+    OR ${freeStockPredicate(alias)}
   )`
+}
+
+/**
+ * Stock nobody has claimed: on hand, and promised to neither a delivery order
+ * nor a stock transfer.
+ *
+ * `transfer_line_id` is the second claim (migration 072). It is a separate
+ * column rather than a status because stock held for a transfer has not moved --
+ * it is still on hand, still billable, still countable -- so the queries that
+ * COUNT stock must keep seeing it and only the queries that CHOOSE stock must
+ * skip it. This predicate is the boundary between those two groups: if a query
+ * decides who gets a unit, it belongs here.
+ */
+export function freeStockPredicate(alias = "s"): string {
+  return `(${alias}.status = 'IN_STOCK'
+    AND ${alias}.do_line_item_id IS NULL
+    AND ${alias}.transfer_line_id IS NULL)`
 }
 
 /** Human-readable note for a rule, shown wherever allocation is presented. */

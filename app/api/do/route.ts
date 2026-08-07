@@ -8,6 +8,7 @@ import { getDOStatusErrorMessage, normalizeDOStatus } from "@/lib/do-status"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
+import { freeStockPredicate } from "@/lib/allocation"
 
 export async function GET(request: NextRequest) {
   try {
@@ -276,8 +277,7 @@ export async function POST(request: NextRequest) {
            AND warehouse_id = $2
            AND client_id = $3
            AND item_id = $4
-           AND status = 'IN_STOCK'
-           AND do_line_item_id IS NULL
+           AND ${freeStockPredicate("stock_serial_numbers")}
          ORDER BY received_date ASC, id ASC
          LIMIT $5
          FOR UPDATE SKIP LOCKED`,

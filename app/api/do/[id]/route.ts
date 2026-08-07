@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { normalizeDOStatus } from "@/lib/do-status"
+import { reservableStockPredicate } from "@/lib/allocation"
 
 type RouteContext = {
   params: Promise<{ id: string }>
@@ -68,10 +69,7 @@ export async function GET(_: NextRequest, context: RouteContext) {
           AND ssn.client_id = dh.client_id
           AND ssn.warehouse_id = dh.warehouse_id
           AND ssn.item_id = dli.item_id
-          AND (
-            (ssn.status = 'RESERVED' AND ssn.do_line_item_id = dli.id)
-            OR (ssn.status = 'IN_STOCK' AND ssn.do_line_item_id IS NULL)
-          )
+          AND ${reservableStockPredicate("ssn", "dli.id")}
       ) availability ON true
       WHERE dli.do_header_id = $1
         AND dh.company_id = $2
