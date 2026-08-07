@@ -175,6 +175,35 @@ async function seedOperator(companyId, warehouseId) {
   const hash = await bcrypt.hash(CHAOS_PASSWORD, 10)
   await withDb(async (db) => {
     await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+
+    // The RBAC rows this fixture needs are CREATED here rather than assumed.
+    // CI restores db/baseline/schema_migrations.sql before migrating, so
+    // migration 008 counts as already applied and its role/permission seed
+    // never runs; scripts/db/seed.mjs only creates SUPER_ADMIN, ADMIN, CLIENT
+    // and VIEWER. There is no OPERATOR role on a fresh CI database, and no
+    // stock.putaway.manage permission. Every other suite misses this because
+    // the fixture user is SUPER_ADMIN, which bypasses requirePermission
+    // entirely -- this is the only test that exercises a real permission check.
+    await db.query(
+      `INSERT INTO rbac_roles (role_code, role_name, description, is_system, is_active)
+       VALUES ('OPERATOR', 'Operator', 'Operations operator', true, true)
+       ON CONFLICT (role_code) DO UPDATE SET is_active = true`
+    )
+    await db.query(
+      `INSERT INTO rbac_permissions (permission_key, permission_name, is_active)
+       VALUES ('stock.putaway.manage', 'Manage Putaway', true)
+       ON CONFLICT (permission_key) DO NOTHING`
+    )
+    // Raising and picking, but deliberately NOT stock.transfer.approve — the
+    // absence of that grant is the control under test.
+    await db.query(
+      `INSERT INTO rbac_role_permissions (role_id, permission_id)
+       SELECT r.id, p.id FROM rbac_roles r
+         JOIN rbac_permissions p ON p.permission_key = 'stock.putaway.manage'
+        WHERE r.role_code = 'OPERATOR'
+       ON CONFLICT DO NOTHING`
+    )
+
     const user = await db.query(
       `INSERT INTO users (company_id, username, email, full_name, role, password_hash,
                           warehouse_id, is_active)
@@ -192,6 +221,36 @@ async function seedOperator(companyId, warehouseId) {
     )
   })
   return username
+}
+
+/**
+ * Grant or revoke stock.transfer.approve on the OPERATOR role.
+ *
+ * Toggling the single permission and re-testing the same user is what proves
+ * the gate is keyed on that permission and nothing else. Asserting via the
+ * SUPER_ADMIN fixture instead would prove nothing: it bypasses the check.
+ */
+async function setOperatorApprove(companyId, granted) {
+  await withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+    if (granted) {
+      await db.query(
+        `INSERT INTO rbac_role_permissions (role_id, permission_id)
+         SELECT r.id, p.id FROM rbac_roles r
+           JOIN rbac_permissions p ON p.permission_key = 'stock.transfer.approve'
+          WHERE r.role_code = 'OPERATOR'
+         ON CONFLICT DO NOTHING`
+      )
+    } else {
+      await db.query(
+        `DELETE FROM rbac_role_permissions rp
+          USING rbac_roles r, rbac_permissions p
+          WHERE rp.role_id = r.id AND rp.permission_id = p.id
+            AND r.role_code = 'OPERATOR'
+            AND p.permission_key = 'stock.transfer.approve'`
+      )
+    }
+  })
 }
 
 /** What a delivery order would be allowed to take right now. */
@@ -753,16 +812,20 @@ async function main() {
     // Approval places a real hold on inventory (migration 072), so it is no
     // longer the same permission as raising or picking.
     const operatorName = await seedOperator(seeded.companyId, seeded.warehouseId)
-    const opLogin = await fetch(`${BASE_URL}/mobile/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        company_code: fixtures.tenantA.code,
-        username: operatorName,
-        password: CHAOS_PASSWORD,
-      }),
-    })
-    const opToken = (await opLogin.json())?.data?.access_token
+    await setOperatorApprove(seeded.companyId, false)
+    const operatorLogin = async () => {
+      const res = await fetch(`${BASE_URL}/mobile/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_code: fixtures.tenantA.code,
+          username: operatorName,
+          password: CHAOS_PASSWORD,
+        }),
+      })
+      return (await res.json())?.data?.access_token
+    }
+    const opToken = await operatorLogin()
     check("the operator can log in", Boolean(opToken))
 
     if (opToken) {
@@ -788,17 +851,23 @@ async function main() {
       check("an operator is refused on permissions", opMessage.includes("Insufficient permissions"),
         `status=${opApprove.status} ${opMessage.slice(0, 60)}`)
 
-      // A permitted user gets PAST the permission gate. By this point in the
-      // suite every unit of the seeded item has been received or written off, so
-      // the correct answer is a stock shortage — which is exactly the proof
-      // wanted: a different failure means a different check refused it.
-      const adminApprove = await api(`/stock/transfers/${Number(opRaised.json?.data?.id)}`, {
-        method: "POST", token, body: { action: "approve" },
+      // Grant that one permission to the same user and nothing else changes.
+      // If the refusal above came from anything other than the new gate, this
+      // would still fail on permissions.
+      await setOperatorApprove(seeded.companyId, true)
+      const grantedToken = await operatorLogin()
+      const nowAllowed = await api(`/stock/transfers/${Number(opRaised.json?.data?.id)}`, {
+        method: "POST", token: grantedToken, body: { action: "approve" },
       })
-      const adminMessage = String(adminApprove.json?.error?.message ?? "")
-      check("a permitted user is not stopped by permissions",
-        !adminMessage.includes("Insufficient permissions"),
-        `status=${adminApprove.status} ${adminMessage.slice(0, 60)}`)
+      const grantedMessage = String(nowAllowed.json?.error?.message ?? "")
+      // By this point every unit of the seeded item has been received or written
+      // off, so the correct answer is a stock shortage — which is the proof
+      // wanted: it got past the permission gate and was stopped by a real check.
+      check("granting stock.transfer.approve is what unblocks it",
+        !grantedMessage.includes("Insufficient permissions"),
+        `status=${nowAllowed.status} ${grantedMessage.slice(0, 60)}`)
+      await setOperatorApprove(seeded.companyId, false)
+
       await api(`/stock/transfers/${Number(opRaised.json?.data?.id)}`, {
         method: "POST", token, body: { action: "cancel" },
       })
@@ -855,7 +924,16 @@ async function main() {
         `WH-STN-%`,
       ])
       // The OPERATOR fixture is deactivated, not deleted: audit_logs references
-      // it and those rows are evidence, not litter.
+      // it and those rows are evidence, not litter. The approve grant is removed
+      // regardless of where the run stopped, so a failure mid-test cannot leave
+      // the role holding a permission it must not have.
+      await db.query(
+        `DELETE FROM rbac_role_permissions rp
+          USING rbac_roles r, rbac_permissions p
+          WHERE rp.role_id = r.id AND rp.permission_id = p.id
+            AND r.role_code = 'OPERATOR'
+            AND p.permission_key = 'stock.transfer.approve'`
+      )
       await db.query(
         `UPDATE users SET is_active = false WHERE company_id = $1 AND username = 'op_stn_fixture'`,
         [TEARDOWN.companyId]
