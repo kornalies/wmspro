@@ -186,7 +186,16 @@ export default function TransferForm() {
   })
 
   const stockQuery = useQuery({
-    queryKey: ["stock", "putaway", warehouseId, applied.serial, applied.item, applied.clientId, fromZoneLayoutId],
+    queryKey: [
+      "stock",
+      "putaway",
+      warehouseId,
+      applied.serial,
+      applied.item,
+      applied.clientId,
+      fromZoneLayoutId,
+      applied.quickFilter === "unassigned",
+    ],
     enabled: !!warehouseId,
     queryFn: async () => {
       const params = new URLSearchParams({ warehouse_id: warehouseId })
@@ -194,6 +203,13 @@ export default function TransferForm() {
       if (applied.item) params.set("item", applied.item)
       if (applied.clientId !== "all") params.set("client_id", applied.clientId)
       if (fromZoneLayoutId !== "all") params.set("from_zone_layout_id", fromZoneLayoutId)
+      // "Unassigned only" has to be applied by the server. The endpoint returns
+      // at most 300 rows ordered by receipt date, so filtering in the browser
+      // searched whatever 300 rows happened to come back — in a warehouse with
+      // a thousand unlocated units, stock that arrived this morning was simply
+      // not in the response. The client-side pass below still runs and is now
+      // a no-op for this filter.
+      if (applied.quickFilter === "unassigned") params.set("unlocated", "true")
 
       const res = await apiClient.get<PutawayStockRow[]>(`/stock/putaway?${params.toString()}`)
       return res.data ?? []

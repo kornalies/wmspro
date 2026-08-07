@@ -3,6 +3,7 @@ import { NextRequest } from "next/server"
 import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
+import { freeStockPredicate } from "@/lib/allocation"
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,8 +32,7 @@ export async function GET(request: NextRequest) {
        WHERE ssn.company_id = $1
          AND ssn.client_id = $2
          AND ssn.warehouse_id = $3
-         AND ssn.status = 'IN_STOCK'
-         AND ssn.do_line_item_id IS NULL
+         AND ${freeStockPredicate("ssn")}
        GROUP BY i.id, i.item_code, i.item_name, i.is_active
        HAVING COUNT(ssn.id) > 0
        ORDER BY i.item_name ASC`,

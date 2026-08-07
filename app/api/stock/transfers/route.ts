@@ -6,7 +6,13 @@ import { fail, ok } from "@/lib/api-response"
 import { writeAudit } from "@/lib/audit"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireFeature } from "@/lib/policy/guards"
-import { StockTransferError, createTransfer } from "@/lib/stock-transfer"
+import {
+  StockTransferError,
+  availableToLineWhere,
+  createTransfer,
+  describeShortages,
+  transferShortages,
+} from "@/lib/stock-transfer"
 
 /** The transfer register, and the way a new one is raised. */
 export async function GET(request: NextRequest) {
@@ -37,10 +43,28 @@ export async function GET(request: NextRequest) {
                 WHERE l.transfer_id = h.id) AS line_count,
               (SELECT COALESCE(SUM(l.quantity_requested), 0)::int FROM stock_transfer_lines l
                 WHERE l.transfer_id = h.id) AS qty_requested,
+              (SELECT COALESCE(SUM(l.quantity_picked), 0)::int FROM stock_transfer_lines l
+                WHERE l.transfer_id = h.id) AS qty_picked,
               (SELECT COALESCE(SUM(l.quantity_sent), 0)::int FROM stock_transfer_lines l
                 WHERE l.transfer_id = h.id) AS qty_sent,
               (SELECT COALESCE(SUM(l.quantity_received), 0)::int FROM stock_transfer_lines l
-                WHERE l.transfer_id = h.id) AS qty_received
+                WHERE l.transfer_id = h.id) AS qty_received,
+              -- How much of an un-dispatched transfer the source cannot currently
+              -- cover. Only DRAFT and APPROVED can still be acted on, so the
+              -- count is skipped elsewhere rather than computed and ignored.
+              CASE WHEN h.status IN ('DRAFT', 'APPROVED') THEN (
+                SELECT COALESCE(SUM(GREATEST(l.quantity_requested - (
+                  SELECT COUNT(*) FROM stock_serial_numbers s
+                    JOIN items i ON i.id = s.item_id AND i.company_id = s.company_id
+                   WHERE s.company_id = l.company_id
+                     AND s.warehouse_id = h.from_warehouse_id
+                     AND s.client_id = h.client_id
+                     AND s.item_id = l.item_id
+                     AND ${availableToLineWhere("l.id", "s", "i")}
+                ), 0)), 0)::int
+                  FROM stock_transfer_lines l
+                 WHERE l.company_id = h.company_id AND l.transfer_id = h.id
+              ) ELSE 0 END AS uncovered_units
          FROM stock_transfer_header h
          LEFT JOIN clients c ON c.id = h.client_id AND c.company_id = h.company_id
          LEFT JOIN warehouses fw ON fw.id = h.from_warehouse_id AND fw.company_id = h.company_id
@@ -135,8 +159,22 @@ export async function POST(request: NextRequest) {
       db
     )
 
+    // A draft is a request, so a shortfall does not block it — a planner may
+    // raise one against stock still inbound. It is reported now rather than at
+    // dispatch so the raiser knows what they have asked for, and approval is
+    // where it becomes a refusal.
+    const shortages = await transferShortages(db, session.companyId, Number(transfer.id), {
+      client_id: clientId,
+      from_warehouse_id: fromWarehouseId,
+    })
+
     await db.query("COMMIT")
-    return ok(transfer, `Transfer ${transfer.transfer_number} created`)
+    return ok(
+      { ...transfer, shortages },
+      shortages.length
+        ? `Transfer ${transfer.transfer_number} created as a draft, but the source warehouse cannot cover it — ${describeShortages(shortages)}`
+        : `Transfer ${transfer.transfer_number} created`
+    )
   } catch (error: unknown) {
     await db.query("ROLLBACK")
     const guarded = guardToFailResponse(error)

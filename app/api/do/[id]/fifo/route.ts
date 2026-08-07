@@ -3,11 +3,13 @@ import { NextRequest } from "next/server"
 import { getSession } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
+import { binLocationExpr } from "@/lib/stock-search"
 import {
   allocatableStockPredicate,
   allocationOrderBy,
   describeAllocationRule,
   normalizeAllocationRule,
+  reservableStockPredicate,
 } from "@/lib/allocation"
 
 type RouteContext = {
@@ -83,7 +85,7 @@ export async function GET(_: NextRequest, context: RouteContext) {
         (ssn.expiry_date - CURRENT_DATE) AS days_to_expiry,
         dh.allocation_rule,
         (CURRENT_DATE - ssn.received_date::date) AS age_days,
-        COALESCE(ssn.bin_location, CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code), 'Unassigned') AS bin_location
+        ${binLocationExpr()} AS bin_location
       FROM do_header dh
       JOIN do_line_items dli ON dli.do_header_id = dh.id AND dli.company_id = dh.company_id
       JOIN items i ON i.id = dli.item_id AND i.company_id = dh.company_id
@@ -92,10 +94,7 @@ export async function GET(_: NextRequest, context: RouteContext) {
        AND ssn.company_id = dh.company_id
        AND ssn.client_id = dh.client_id
        AND ssn.warehouse_id = dh.warehouse_id
-       AND (
-         (ssn.status = 'RESERVED' AND ssn.do_line_item_id = dli.id)
-         OR (ssn.status = 'IN_STOCK' AND ssn.do_line_item_id IS NULL)
-       )
+       AND ${reservableStockPredicate("ssn", "dli.id")}
        AND ${allocatableStockPredicate("ssn", "i")}
       LEFT JOIN warehouse_zone_layouts zl ON zl.id = ssn.zone_layout_id AND zl.company_id = dh.company_id
       WHERE dh.company_id = $1

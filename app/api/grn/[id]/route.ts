@@ -64,7 +64,9 @@ export async function GET(_: NextRequest, context: RouteContext) {
           (SELECT MAX(bin_location)
            FROM stock_serial_numbers
            WHERE grn_line_item_id = gli.id),
-          CONCAT(zl.zone_code, '/', zl.rack_code, '/', zl.bin_code)
+          -- CONCAT renders NULL as '', so an unlocated line used to report the
+          -- string '//' rather than nothing. NULLIF puts it back to NULL.
+          NULLIF(CONCAT_WS('/', NULLIF(zl.zone_code, ''), NULLIF(zl.rack_code, ''), NULLIF(zl.bin_code, '')), '')
         ) as effective_bin_location,
         (SELECT string_agg(lp.lp_code || ' (x' || lp.quantity || ')', ', ' ORDER BY lp.created_at)
          FROM mobile_lp_records lp

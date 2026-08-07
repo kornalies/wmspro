@@ -18,6 +18,7 @@ import {
   allocatableStockPredicate,
   allocationOrderBy,
   normalizeAllocationRule,
+  reservableStockPredicate,
   type AllocationRule,
 } from "@/lib/allocation"
 
@@ -104,10 +105,7 @@ export async function commitDoLineStock(
        AND s.client_id = $2
        AND s.item_id = $3
        AND s.company_id = $4
-       AND (
-         (s.status = 'RESERVED' AND s.do_line_item_id = $5)
-         OR (s.status = 'IN_STOCK' AND s.do_line_item_id IS NULL)
-       )
+       AND ${reservableStockPredicate("s", "$5")}
        AND ${allocatableStockPredicate("s", "i")}
      ORDER BY
        CASE WHEN s.status = 'RESERVED' THEN 0 ELSE 1 END,
@@ -134,10 +132,7 @@ export async function commitDoLineStock(
          AND s.client_id = $2
          AND s.item_id = $3
          AND s.company_id = $4
-         AND (
-           (s.status = 'RESERVED' AND s.do_line_item_id = $5)
-           OR (s.status = 'IN_STOCK' AND s.do_line_item_id IS NULL)
-         )
+         AND ${reservableStockPredicate("s", "$5")}
          AND NOT (${allocatableStockPredicate("s", "i")})`,
       [warehouseId, clientId, itemId, companyId, doLineItemId]
     )

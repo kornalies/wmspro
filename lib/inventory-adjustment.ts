@@ -278,7 +278,8 @@ export async function approveAdjustment(
         const sinceId = await maxMovementId(db, companyId)
         await db.query(
           `UPDATE stock_serial_numbers
-              SET status = 'CANCELLED', do_line_item_id = NULL, updated_at = CURRENT_TIMESTAMP
+              SET status = 'CANCELLED', do_line_item_id = NULL, transfer_line_id = NULL,
+                  updated_at = CURRENT_TIMESTAMP
             WHERE company_id = $1 AND id = $2`,
           [companyId, found.id]
         )

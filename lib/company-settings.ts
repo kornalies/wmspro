@@ -11,6 +11,27 @@ type DBClient = {
   ) => Promise<{ rows: Array<Record<string, unknown>>; rowCount: number | null }>
 }
 
+/**
+ * Whether a stock transfer must be approved by someone other than its raiser.
+ *
+ * Off by default, and that default is a judgement rather than laziness: a
+ * single-operator warehouse would be unable to move stock at all if this were
+ * forced on, and RBAC already carries the structural half of the control —
+ * OPERATOR does not hold `stock.transfer.approve` (migration 075). This flag is
+ * for tenants who want the separation enforced even among users who all hold the
+ * permission.
+ */
+export async function getTransferSeparateApprover(
+  db: DBClient,
+  companyId: number
+): Promise<boolean> {
+  const result = await db.query(
+    `SELECT settings->>'transfer_separate_approver' AS flag FROM companies WHERE id = $1`,
+    [companyId]
+  )
+  return String(result.rows[0]?.flag ?? "").trim().toLowerCase() === "true"
+}
+
 export const OUTBOUND_BILLING_TRIGGERS = ["DISPATCH", "GOODS_ISSUE"] as const
 export type OutboundBillingTrigger = (typeof OUTBOUND_BILLING_TRIGGERS)[number]
 
