@@ -35,18 +35,43 @@ async function apiPut(path, token, body, headers = {}) {
   return { status: res.status, json }
 }
 
+// The suite never deletes its invoices, and uq_invoice_header_company_client_period
+// is (company_id, client_id, period_from, period_to). Fixtures used to pick a period
+// of anchor + (Date.now() % 300) days, so the slot space recycled after 300 runs and
+// the two anchors below overlapped each other -- a leftover row from an earlier run
+// then failed the whole suite on insert with a duplicate key. Claim the next unused
+// day after the anchor instead, which cannot collide with a previous run.
+async function nextFixturePeriod(client, companyId, clientId, anchor) {
+  const res = await client.query(
+    `SELECT to_char(
+              GREATEST(COALESCE(MAX(period_from) + 1, $3::date), $3::date),
+              'YYYY-MM-DD'
+            ) AS period
+       FROM invoice_header
+      WHERE company_id = $1
+        AND client_id = $2
+        AND period_from >= $3::date
+        AND period_from < $3::date + INTERVAL '40 years'`,
+    [companyId, clientId, anchor]
+  )
+  return res.rows[0].period
+}
+
 async function createFinanceFixture(fixtures) {
   const now = Date.now()
-  const future = new Date(Date.UTC(2099, 0, 1))
-  future.setUTCDate(future.getUTCDate() + (now % 300))
-  const invoiceDate = future.toISOString().slice(0, 10)
-  const dueDate = invoiceDate
   const out = { invoiceId: 0, billedTxId: 0 }
 
   await withDb(async (client) => {
     await client.query("BEGIN")
     try {
       await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      const invoiceDate = await nextFixturePeriod(
+        client,
+        fixtures.tenantA.companyId,
+        fixtures.ids.a.clientId,
+        "2099-01-01"
+      )
+      const dueDate = invoiceDate
 
       const inv = await client.query(
         `INSERT INTO invoice_header (
@@ -203,15 +228,19 @@ async function scenarioFH4UnsafeUnbillBlocked(token, billedTxId) {
 
 async function createVoidableInvoice(fixtures) {
   const now = Date.now()
-  const future = new Date(Date.UTC(2099, 6, 1))
-  future.setUTCDate(future.getUTCDate() + (now % 300))
-  const invoiceDate = future.toISOString().slice(0, 10)
   const out = { invoiceId: 0, billedTxId: 0 }
 
   await withDb(async (client) => {
     await client.query("BEGIN")
     try {
       await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      // Far enough past the FH anchor that the two fixtures' claimed days cannot meet.
+      const invoiceDate = await nextFixturePeriod(
+        client,
+        fixtures.tenantA.companyId,
+        fixtures.ids.a.clientId,
+        "2150-01-01"
+      )
 
       const inv = await client.query(
         `INSERT INTO invoice_header (
@@ -304,16 +333,70 @@ async function scenarioFH5VoidReleasesCharges(token, fixtures) {
   summarizePass("FIN_HARDENING 5")
 }
 
+// Every run used to leave its invoices behind, so a dev database slowly filled
+// with INV-HARD / INV-VOID rows dated 2099 sitting in the finance register next
+// to real ones. They are deleted at the end now, which also keeps the period
+// slots free rather than relying on nextFixturePeriod to keep finding new ones.
+async function cleanupFinanceFixtures(fixtures) {
+  await withDb(async (client) => {
+    await client.query("BEGIN")
+    try {
+      await client.query("SELECT set_config('app.company_id', $1, true)", [String(fixtures.tenantA.companyId)])
+      const ids = await client.query(
+        `SELECT id FROM invoice_header
+          WHERE company_id = $1
+            AND (invoice_number LIKE 'INV-HARD-%' OR invoice_number LIKE 'INV-VOID-%')`,
+        [fixtures.tenantA.companyId]
+      )
+      const list = ids.rows.map((r) => r.id)
+      if (list.length) {
+        await client.query(`DELETE FROM invoice_lines WHERE company_id = $1 AND invoice_id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+        await client.query(`DELETE FROM invoice_payments WHERE company_id = $1 AND invoice_id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+      }
+      // The suite's own charges, by their fixture reference. Deleted rather than
+      // released to UNBILLED: they are fixtures, and releasing them would leave
+      // them queued to land on the next real invoice.
+      await client.query(
+        `DELETE FROM billing_transactions
+          WHERE company_id = $1 AND source_ref_no IN ('HARDENING-TX', 'VOID-RELEASE-TX')`,
+        [fixtures.tenantA.companyId]
+      )
+      if (list.length) {
+        await client.query(`DELETE FROM invoice_header WHERE company_id = $1 AND id = ANY($2::int[])`, [
+          fixtures.tenantA.companyId,
+          list,
+        ])
+      }
+      await client.query("COMMIT")
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    }
+  })
+}
+
 async function main() {
   const fixtures = await ensureChaosFixtures()
   const token = await login(fixtures.tenantA.code, fixtures.tenantA.username, fixtures.tenantA.password)
   const financeFixture = await createFinanceFixture(fixtures)
 
-  await scenarioFH1DraftIdempotency(token, fixtures)
-  await scenarioFH2FinalizeIdempotency(token, financeFixture.invoiceId)
-  await scenarioFH3PaymentChecks(token, financeFixture.invoiceId)
-  await scenarioFH4UnsafeUnbillBlocked(token, financeFixture.billedTxId)
-  await scenarioFH5VoidReleasesCharges(token, fixtures)
+  try {
+    await scenarioFH1DraftIdempotency(token, fixtures)
+    await scenarioFH2FinalizeIdempotency(token, financeFixture.invoiceId)
+    await scenarioFH3PaymentChecks(token, financeFixture.invoiceId)
+    await scenarioFH4UnsafeUnbillBlocked(token, financeFixture.billedTxId)
+    await scenarioFH5VoidReleasesCharges(token, fixtures)
+  } finally {
+    // In a finally block so a failing scenario still cleans up -- otherwise the
+    // first red run leaves debris that the next run has to work around.
+    await cleanupFinanceFixtures(fixtures)
+  }
   console.log("Finance hardening suite complete")
 }
 

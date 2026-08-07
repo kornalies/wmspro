@@ -63,7 +63,7 @@ export function allocationOrderBy(rule: AllocationRule, alias = "s"): string {
 /**
  * Predicate excluding stock that must never be auto-allocated.
  *
- * Two separate rules, and they are not the same thing:
+ * Three separate rules, and they are not the same thing:
  *
  *   EXPIRED — expiry_date is in the past. Never allocatable, for any item.
  *
@@ -71,6 +71,12 @@ export function allocationOrderBy(rule: AllocationRule, alias = "s"): string {
  *     saleable stock, but a customer contracted to a minimum remaining life will
  *     reject it on arrival. Excluding it here is what stops that delivery being
  *     made, and it applies only to items that declare a minimum.
+ *
+ *   HELD OR RECALLED BATCH — a decision someone made, recorded in
+ *     stock_batch_status. Unlike the other two this is not a property of the
+ *     stock at all, which is exactly why it needs a table. Enforcing it here is
+ *     what makes a recall more than a report: without it, allocation keeps
+ *     handing out affected stock while someone works through the impact list.
  *
  * Written as SQL rather than filtered in JS because the allocation query uses
  * LIMIT ... FOR UPDATE SKIP LOCKED: filtering after the fact would take the lock
@@ -83,7 +89,34 @@ export function allocatableStockPredicate(alias = "s", itemAlias = "i"): string 
       ${itemAlias}.min_shelf_life_days IS NULL
       OR ${alias}.expiry_date IS NULL
       OR ${alias}.expiry_date >= CURRENT_DATE + (${itemAlias}.min_shelf_life_days || ' days')::interval
-    )`
+    )
+    AND ${allocatableBatchPredicate(alias)}`
+}
+
+/**
+ * The held/recalled-batch half of the exclusion, on its own.
+ *
+ * Separate because callers that report on stock (the expiry exposure, the
+ * packable pool's explanations) need to distinguish "blocked because of its
+ * dates" from "blocked because someone held it" — those have different answers
+ * for the operator asking why.
+ *
+ * Serials with no batch_number can never be held: a hold is keyed on a batch,
+ * and NOT EXISTS over a NULL batch would be vacuously true anyway. Spelled out
+ * so that is a decision rather than an accident of SQL.
+ */
+export function allocatableBatchPredicate(alias = "s"): string {
+  return `(
+    ${alias}.batch_number IS NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM stock_batch_status bs
+       WHERE bs.company_id = ${alias}.company_id
+         AND bs.client_id = ${alias}.client_id
+         AND bs.item_id = ${alias}.item_id
+         AND bs.batch_number = ${alias}.batch_number
+         AND bs.status <> 'ACTIVE'
+    )
+  )`
 }
 
 /**

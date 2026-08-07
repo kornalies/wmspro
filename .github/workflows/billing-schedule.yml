@@ -1,0 +1,132 @@
+name: Billing schedule
+
+# Runs the daily billing jobs for every active tenant.
+#
+# Until this existed nothing was scheduled at all: /api/finance/jobs/* are
+# session-scoped, so a human had to click "run" per tenant. The cycle run is
+# catch-up capable (docs/billing-cron.md), which meant invoices were quietly
+# late rather than missing -- easy to leave broken, and impossible to notice.
+#
+# Requires two repository secrets:
+#   BILLING_APP_URL       e.g. https://wms.example.com  (no trailing slash)
+#   BILLING_CRON_SECRET   must match the deployed app's BILLING_CRON_SECRET
+# With either unset the job fails loudly rather than silently doing nothing.
+#
+# The run is shardable: the client population splits on client_id % shard_count,
+# and each shard is an independent job. At the current scale one shard is right;
+# raise shard_count when a single pass stops fitting comfortably in one request.
+# Shards are disjoint and exhaustive, and shard 0 alone takes the storage
+# snapshot (it is one set-based statement per tenant, so it does not split).
+
+on:
+  # The daily trigger is deliberately commented out until the two secrets above
+  # exist. Enabled without them, this workflow would fail every night and train
+  # everyone to ignore a red billing job -- which is worse than not having one.
+  # Uncomment the moment BILLING_APP_URL and BILLING_CRON_SECRET are set; that
+  # is the whole activation step.
+  #
+  # schedule:
+  #   # 00:30 UTC daily. After the day has closed everywhere the tenants operate,
+  #   # and before the working day starts in IST.
+  #   - cron: "30 0 * * *"
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Billing date (YYYY-MM-DD). Defaults to today on the server."
+        required: false
+        type: string
+      shard_count:
+        description: "Split the client population across this many parallel runs."
+        required: false
+        default: "1"
+        type: string
+
+jobs:
+  # One shard per job, in parallel. At four tenants a single run is a few
+  # seconds and SHARD_COUNT stays 1; the matrix exists so raising it is a config
+  # change rather than a rewrite when a single pass stops fitting in one request.
+  #
+  # fail-fast is off deliberately: a failing shard must not cancel the others,
+  # or one bad tenant stops the rest being invoiced — the same rule the route
+  # itself follows per tenant.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.build.outputs.shards }}
+      count: ${{ steps.build.outputs.count }}
+    steps:
+      - name: Build shard list
+        id: build
+        env:
+          SHARD_COUNT: ${{ inputs.shard_count || '1' }}
+        run: |
+          count="${SHARD_COUNT:-1}"
+          case "$count" in
+            ''|*[!0-9]*) echo "shard_count must be a positive integer"; exit 1 ;;
+          esac
+          [ "$count" -lt 1 ] && { echo "shard_count must be at least 1"; exit 1; }
+          echo "shards=$(seq 0 $((count - 1)) | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+  run-billing-jobs:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+
+    steps:
+      - name: Check configuration
+        env:
+          APP_URL: ${{ secrets.BILLING_APP_URL }}
+          CRON_SECRET: ${{ secrets.BILLING_CRON_SECRET }}
+        run: |
+          missing=""
+          [ -z "$APP_URL" ] && missing="$missing BILLING_APP_URL"
+          [ -z "$CRON_SECRET" ] && missing="$missing BILLING_CRON_SECRET"
+          if [ -n "$missing" ]; then
+            echo "Missing repository secret(s):$missing"
+            exit 1
+          fi
+
+      - name: Run billing jobs
+        env:
+          APP_URL: ${{ secrets.BILLING_APP_URL }}
+          CRON_SECRET: ${{ secrets.BILLING_CRON_SECRET }}
+          RUN_DATE: ${{ inputs.run_date }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ needs.plan.outputs.count }}
+        run: |
+          payload=$(jq -nc \
+            --arg run_date "$RUN_DATE" \
+            --argjson index "$SHARD_INDEX" \
+            --argjson count "$SHARD_COUNT" \
+            '{}
+             + (if $run_date == "" then {} else {run_date: $run_date} end)
+             + (if $count <= 1 then {} else {shard: {index: $index, count: $count}} end)')
+          echo "Payload: $payload"
+
+          # --fail-with-body so a 4xx/5xx fails the step but still prints why.
+          response=$(curl --fail-with-body -sS -X POST \
+            "$APP_URL/api/finance/jobs/scheduled-run" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d "$payload")
+
+          echo "$response" | jq .
+
+          # A 200 only means the fan-out ran. Individual tenants can fail
+          # independently by design, so the step has to inspect the body --
+          # otherwise one tenant silently stops being invoiced forever.
+          failed=$(echo "$response" | jq -r '.data.failed_count // 0')
+          if [ "$failed" != "0" ]; then
+            echo "::error::$failed tenant job(s) failed"
+            echo "$response" | jq -r '.data.results[] | select(.status == "FAILED") | "\(.company_code) \(.job): \(.detail)"'
+            exit 1
+          fi
+
+          truncated=$(echo "$response" | jq -r '[.data.results[].detail.truncatedClients // [] | length] | add // 0')
+          if [ "$truncated" != "0" ]; then
+            echo "::warning::$truncated client(s) hit the per-run catch-up cap; run again to continue."
+          fi

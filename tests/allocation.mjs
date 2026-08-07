@@ -14,7 +14,7 @@
  */
 
 import process from "node:process"
-import { BASE_URL, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
+import { BASE_URL, deleteTestFixtures, ensureChaosFixtures, withDb } from "./chaos/_shared.mjs"
 
 const SUFFIX = Date.now().toString().slice(-9)
 
@@ -66,12 +66,17 @@ async function login(fixtures) {
  */
 let seedSeq = 0
 
+// Every item and DO this suite creates, so the finally in main() can remove
+// them. Each run used to leave eight throwaway items behind, and they piled up
+// in Stock Search among real inventory.
+const SEEDED = []
+
 async function seed(fixtures, { allocationRule, minShelfLifeDays = null, extraExpired = 0 }) {
   // Every seed gets its own item and DO. Sharing an item across scenarios would
   // let one scenario's leftover stock satisfy another's allocation.
   const key = `${allocationRule}${++seedSeq}`
   const doNumber = `DO-ALLOC-${SUFFIX}-${key}`
-  return withDb(async (db) => {
+  const result = await withDb(async (db) => {
     const companyId = fixtures.tenantA.companyId
     const { clientId, warehouseId } = fixtures.ids.a
     await db.query("BEGIN")
@@ -167,6 +172,19 @@ async function seed(fixtures, { allocationRule, minShelfLifeDays = null, extraEx
       throw error
     }
   })
+  SEEDED.push(result)
+  return result
+}
+
+async function cleanupSeeded() {
+  if (!SEEDED.length) return
+  await withDb(async (db) =>
+    deleteTestFixtures(db, {
+      companyId: SEEDED[0].companyId,
+      itemIds: SEEDED.map((s) => s.itemId),
+      doIds: SEEDED.map((s) => s.doId),
+    })
+  )
 }
 
 async function dispatchedSerialIds(companyId, doLineId) {
@@ -377,14 +395,25 @@ async function main() {
   })
 
   console.log("")
+  // Reporting only -- the exit code is set by the finally below, which must run
+  // first so the suite's throwaway items are removed either way.
   if (failures > 0) {
     console.log(`Allocation: ${failures} check(s) failed.`)
-    process.exit(1)
+    return
   }
   console.log("Allocation: all checks passed.")
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-})
+main()
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    failures = failures || 1
+  })
+  // In a finally so a failing run still removes its items, rather than leaving
+  // debris behind exactly when someone is about to re-run the suite.
+  .finally(async () => {
+    await cleanupSeeded().catch((error) => {
+      console.error(`cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    process.exit(failures ? 1 : 0)
+  })

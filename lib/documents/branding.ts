@@ -60,6 +60,11 @@ export const DOCUMENT_BRAND_OWNER: Record<DocumentType, BrandOwner> = {
   "dispatch-manifest": "gwu",
   "gate-pass": "gwu",
   "job-card": "gwu",
+  // Both are internal: a transfer note moves stock between GWU's own warehouses,
+  // and an adjustment report is GWU explaining its own stock records. The client
+  // may be shown either, but neither is issued on their behalf.
+  "stock-transfer-note": "gwu",
+  "inventory-adjustment-report": "gwu",
 }
 
 /**

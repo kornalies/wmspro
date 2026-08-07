@@ -823,6 +823,34 @@ export async function generateInvoiceDrafts(
   return { generatedCount }
 }
 
+/**
+ * Split the client population into `count` disjoint slices.
+ *
+ * The whole run is one pass over every client of every tenant, inside one HTTP
+ * request. That is fine at four tenants and is the wrong shape at four hundred:
+ * one slow client stalls everybody behind it, and a timeout loses the whole
+ * pass rather than a slice of it.
+ *
+ * Sharding on `client_id % count` rather than on a cursor keeps the slices
+ * stable across runs, so a shard that fails can be retried on its own without
+ * re-deriving where it was. Slices are disjoint and exhaustive by construction —
+ * every client_id has exactly one remainder — which is the property the test
+ * asserts rather than trusting the arithmetic.
+ */
+export type BillingShard = { index: number; count: number }
+
+export function normalizeShard(value: unknown): BillingShard | null {
+  if (!value || typeof value !== "object") return null
+  const raw = value as { index?: unknown; count?: unknown }
+  const count = Math.trunc(Number(raw.count))
+  const index = Math.trunc(Number(raw.index))
+  if (!Number.isFinite(count) || count < 1) return null
+  if (!Number.isFinite(index) || index < 0 || index >= count) {
+    throw new Error(`shard index must be between 0 and ${count - 1}`)
+  }
+  return count === 1 ? null : { index, count }
+}
+
 export async function generateInvoiceDraftsByBillingCycle(
   db: DBClient,
   args: {
@@ -831,11 +859,18 @@ export async function generateInvoiceDraftsByBillingCycle(
     runDate: string
     runKeyPrefix: string
     clientId?: number | null
+    shard?: BillingShard | null
   }
 ) {
   const params: unknown[] = [args.companyId]
-  const clientFilter = args.clientId ? "AND cbp.client_id = $2" : ""
-  if (args.clientId) params.push(args.clientId)
+  let clientFilter = ""
+  if (args.clientId) {
+    params.push(args.clientId)
+    clientFilter = `AND cbp.client_id = $${params.length}`
+  } else if (args.shard) {
+    params.push(args.shard.count, args.shard.index)
+    clientFilter = `AND (cbp.client_id % $${params.length - 1}) = $${params.length}`
+  }
 
   const profileRes = await db.query(
     `SELECT
@@ -930,6 +965,7 @@ export async function generateInvoiceDraftsByBillingCycle(
     skipped,
     windows,
     truncatedClients,
+    shard: args.shard ?? null,
   }
 }
 

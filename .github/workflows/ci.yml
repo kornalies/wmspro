@@ -27,7 +27,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+: the location and billing-cycle suites import .ts modules
+          # directly and rely on Node's native type stripping.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -42,5 +44,149 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `npm run build` uses --experimental-build-mode=compile, which skips type
+      # checking -- without this step type errors reach main with CI green.
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
+
+  db-suites:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches the server db/baseline was dumped from (pg_dump 18 output can
+        # use syntax an older server rejects).
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-jwt-secret-that-is-long-enough-for-tests
+      # Mirrors production's two roles. Neither may be a superuser: the app role
+      # is refused by ensureSafeDbRole in lib/db.ts, and an owner role that is a
+      # superuser makes every view bypass RLS -- which isolation SCENARIO 1.4
+      # checks for explicitly.
+      MIGRATOR_DATABASE_URL: postgresql://wms_migrator:wms_migrator@localhost:5432/wms_test?sslmode=disable
+      DATABASE_URL: postgresql://wms_app:wms_app@localhost:5432/wms_test?sslmode=disable
+      PGSSLMODE: disable
+      WMS_COMPANY_CODE: GWU
+      # ONLY FOR EPHEMERAL CI DB. NEVER reuse outside this isolated CI database.
+      WMS_USERNAME: wms_ci
+      WMS_PASSWORD: wms_ci_password
+      WMS_API_BASE_URL: http://localhost:3000/api
+      # Gates the system cron route. The suite asserts both that the secret is
+      # required and that the fan-out works, so it must match the app's.
+      BILLING_CRON_SECRET: ci-billing-cron-secret
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # 22+: the location and billing-cycle suites import .ts modules
+          # directly and rely on Node's native type stripping.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create database roles
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE wms_migrator LOGIN PASSWORD 'wms_migrator' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
+            -c "CREATE ROLE wms_app LOGIN PASSWORD 'wms_app' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;" \
+            -c "ALTER SCHEMA public OWNER TO wms_migrator;" \
+            -c "GRANT ALL ON SCHEMA public TO wms_migrator;"
+
+      # db/migrations/001 starts by ALTERing grn_header -- the numbered migrations
+      # have never contained the base schema, so `db:migrate` against an empty
+      # database fails immediately and a clean install has never been possible
+      # from this repo. db/baseline is a pg_dump of the live schema plus the
+      # schema_migrations rows, so the migrator sees 001-068 as already applied
+      # and only a PR's *new* migrations actually run here.
+      - name: Restore schema baseline
+        run: |
+          # Extensions need a superuser, so they go in as postgres.
+          PGPASSWORD=postgres psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 -q \
+            -f db/baseline/extensions.sql
+          # Everything else is restored as wms_migrator so the tables and views
+          # are owned by a non-superuser, exactly as in production.
+          #
+          # The dump emits a bare `CREATE SCHEMA public;` that collides with the
+          # schema the image already ships. Strip that one line at restore time
+          # rather than editing the generated file, so refreshing the baseline
+          # needs no manual fixups.
+          export PGPASSWORD=wms_migrator
+          grep -v '^CREATE SCHEMA public;$' db/baseline/schema.sql \
+            | psql -h localhost -U wms_migrator -d wms_test -v ON_ERROR_STOP=1 -q
+          psql -h localhost -U wms_migrator -d wms_test -v ON_ERROR_STOP=1 -q \
+            -f db/baseline/schema_migrations.sql
+
+      - name: Run migrations
+        run: npm run db:migrate
+
+      # The baseline dump carries no grants (--no-privileges), so without this the
+      # app role can see the schema and nothing else. RLS still applies --
+      # wms_app is neither owner nor BYPASSRLS, so tenant isolation is enforced
+      # exactly as it is in production.
+      - name: Grant runtime privileges
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d wms_test -v ON_ERROR_STOP=1 \
+            -c "GRANT USAGE ON SCHEMA public TO wms_app;" \
+            -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wms_app;" \
+            -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO wms_app;" \
+            -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO wms_app;"
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Build application
+        run: npx next build
+
+      - name: Start application
+        run: |
+          nohup npm run start > server.log 2>&1 &
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "App is healthy after ${i}s"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "App did not become healthy within 60s"
+            curl -sS http://localhost:3000/api/health || true
+            cat server.log
+            exit 1
+          fi
+
+      - name: Run database suites
+        run: npm run test:suites
+
+      # The suites assert over HTTP, so a 500 shows up as a failed assertion with
+      # no server-side stack. Surface the log whenever the job fails.
+      - name: Application log
+        if: failure()
+        run: cat server.log

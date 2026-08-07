@@ -3,17 +3,15 @@ import path from "node:path"
 import process from "node:process"
 import pg from "pg"
 
+import {
+  findDuplicateNumbers,
+  redact,
+  resolveMigrationTargets,
+} from "./migration-targets.mjs"
+
 const { Client } = pg
 const MIGRATIONS_DIR = path.resolve(process.cwd(), "db", "migrations")
 const MIGRATION_NAME_RE = /^\d{3}_.+\.sql$/
-
-function getDatabaseUrl() {
-  const value = process.env.MIGRATOR_DATABASE_URL || process.env.DATABASE_URL
-  if (!value || !String(value).trim()) {
-    throw new Error("Missing MIGRATOR_DATABASE_URL or DATABASE_URL")
-  }
-  return String(value)
-}
 
 function normalizeMigrationSql(sql) {
   return sql
@@ -89,23 +87,70 @@ async function applyMigration(client, filename) {
   }
 }
 
-async function main() {
-  const client = new Client({ connectionString: getDatabaseUrl() })
+async function migrateTarget(target, files) {
+  const client = new Client({ connectionString: target.url })
   await client.connect()
+  let applied = 0
   try {
     await ensureMigrationsTable(client)
-    const files = await getMigrationFiles()
     for (const filename of files) {
       if (await isApplied(client, filename)) {
-        console.log(`Already applied ${filename}`)
+        console.log(`  Already applied ${filename}`)
         continue
       }
       await applyMigration(client, filename)
+      applied += 1
     }
-    console.log("Migrations completed.")
   } finally {
     await client.end()
   }
+  return applied
+}
+
+async function main() {
+  const targets = resolveMigrationTargets(process.env)
+  const files = await getMigrationFiles()
+
+  // Surfaced every run rather than left to be rediscovered by whoever picks the
+  // next number. Not fatal -- the runner keys on the full filename, so the
+  // existing collisions apply in a stable order and are harmless.
+  for (const { number, files: clashing } of findDuplicateNumbers(files)) {
+    console.warn(`Warning: migration number ${number} is used by ${clashing.join(" and ")}`)
+  }
+
+  const results = []
+  for (const target of targets) {
+    console.log(`\n== ${target.name} ==`)
+    if (targets.length > 1) console.log(`   ${redact(target.url)}`)
+    try {
+      const applied = await migrateTarget(target, files)
+      results.push({ target: target.name, ok: true, applied })
+    } catch (error) {
+      // One tenant's failure must not hide the state of the rest. With a
+      // database per tenant, aborting on the first error would leave an estate
+      // in an unknown mix of versions and no report of which are which.
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`  FAILED: ${message}`)
+      results.push({ target: target.name, ok: false, error: message })
+    }
+  }
+
+  if (targets.length > 1) {
+    console.log("\n== Summary ==")
+    for (const result of results) {
+      console.log(
+        result.ok
+          ? `  OK      ${result.target} (${result.applied} applied)`
+          : `  FAILED  ${result.target}: ${result.error}`
+      )
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok)
+  if (failed.length) {
+    throw new Error(`${failed.length} of ${results.length} migration target(s) failed`)
+  }
+  console.log("\nMigrations completed.")
 }
 
 main().catch((error) => {
