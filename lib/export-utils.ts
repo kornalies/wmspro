@@ -681,6 +681,39 @@ export const exportInvoicesToExcel = (invoices: Array<any>) => {
 }
 
 /**
+ * Export client-wise receivables (aging) to Excel.
+ *
+ * The as-of date is part of the filename and the first column header, because an
+ * aging report detached from the date it was aged at is unreadable a week later.
+ */
+export const exportReceivablesToExcel = (rows: Array<any>, asOf: string) => {
+    const data = rows.map(row => ({
+        'Client': row.client_name,
+        'Client Code': row.client_code || '',
+        'Open Invoices': row.open_invoices,
+        'Overdue Invoices': row.overdue_invoices,
+        'Oldest Due Date': row.oldest_due_date || '',
+        'Days Overdue (Oldest)': row.days_oldest,
+        'Total Billed': row.billed,
+        'Collected': row.collected,
+        'Credit Notes': row.credit_notes,
+        'Not Yet Due': row.current,
+        '1-30 Days': row.bucket_1_30,
+        '31-60 Days': row.bucket_31_60,
+        '61-90 Days': row.bucket_61_90,
+        '90+ Days': row.bucket_90_plus,
+        'Overdue': row.overdue,
+        'Outstanding': row.outstanding
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, `Receivables ${asOf}`.slice(0, 31))
+
+    XLSX.writeFile(wb, `Receivables-Aging-${asOf}.xlsx`)
+}
+
+/**
  * Export Gate Log to Excel
  */
 export const exportGateLogToExcel = (gateLogs: Array<any>) => {

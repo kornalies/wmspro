@@ -49,6 +49,9 @@ type BrandOwner = "tenant" | "gwu"
 export const DOCUMENT_BRAND_OWNER: Record<DocumentType, BrandOwner> = {
   "delivery-note": "tenant",
   "commercial-invoice": "tenant",
+  // A statement of account is a demand for payment sent under the tenant's own
+  // name, for the same reason the invoice it summarises is.
+  "client-statement": "tenant",
   "packing-list": "tenant",
   "packing-slip": "tenant",
   "consignment-note": "tenant",

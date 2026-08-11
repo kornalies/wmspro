@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
 import { DO_FULFILLMENT_STATUSES } from "@/lib/do-status"
+import { agingOf, openInvoicesForClient } from "@/lib/finance-receivables"
 
 import { guardPortalProductError, hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
 
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
       return fail(clientIdCheck.code, clientIdCheck.message, clientIdCheck.status)
     }
 
-    const [stock, grn, doSummary, billing, disputes, sla] = await Promise.all([
+    const [stock, grn, doSummary, billing, disputes, sla, openItems] = await Promise.all([
       query(
         `SELECT
           COUNT(*) FILTER (WHERE status = 'IN_STOCK')::int AS in_stock_units,
@@ -46,14 +47,22 @@ export async function GET(request: Request) {
          WHERE client_id = $1`,
         [clientIdCheck.clientId, DO_FULFILLMENT_STATUSES]
       ),
+      // Drafts and voids are excluded here. They used to be counted, so a client
+      // whose next invoice was still being prepared saw it in the outstanding
+      // figure on their own dashboard while finance did not — the two screens
+      // now use the same definition (lib/finance-receivables.ts).
       query(
         `SELECT
            COUNT(*)::int AS total_invoices,
            COUNT(*) FILTER (WHERE COALESCE(balance_amount, 0) > 0 AND due_date < CURRENT_DATE)::int AS overdue_invoices,
            COALESCE(SUM(COALESCE(grand_total, 0)), 0)::numeric AS total_billed,
-           COALESCE(SUM(COALESCE(balance_amount, 0)), 0)::numeric AS outstanding_amount
+           COALESCE(SUM(COALESCE(paid_amount, 0)), 0)::numeric AS collected_amount,
+           COALESCE(SUM(COALESCE(balance_amount, 0)), 0)::numeric AS outstanding_amount,
+           COALESCE(SUM(COALESCE(balance_amount, 0))
+             FILTER (WHERE due_date < CURRENT_DATE), 0)::numeric AS overdue_amount
          FROM invoice_header
-         WHERE client_id = $1`,
+         WHERE client_id = $1
+           AND COALESCE(status, '') <> ALL (ARRAY['DRAFT', 'VOID'])`,
         [clientIdCheck.clientId]
       ),
       query(
@@ -102,13 +111,21 @@ export async function GET(request: Request) {
          FROM base`,
         [clientIdCheck.clientId]
       ),
+      // Same open-item query the receivables screen and the statement run, so a
+      // client and their account manager read the same ageing.
+      openInvoicesForClient(session.companyId, clientIdCheck.clientId),
     ])
 
     return ok({
       stock: stock.rows[0] || {},
       grn: grn.rows[0] || {},
       orders: doSummary.rows[0] || {},
-      billing: billing.rows[0] || {},
+      billing: {
+        ...(billing.rows[0] || {}),
+        aging: agingOf(openItems.rows),
+        open_items: openItems.rows.length,
+        aged_as_of: openItems.asOf,
+      },
       disputes: disputes.rows[0] || {},
       sla: sla.rows[0] || {},
     })

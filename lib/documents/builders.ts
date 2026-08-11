@@ -12,7 +12,14 @@
 
 import { loadBranding, type DocumentDBClient } from "@/lib/documents/branding"
 import { buildDocumentQr } from "@/lib/documents/verify"
-import { statusTone } from "@/lib/documents/types"
+import { NON_VERIFIABLE_TYPES, statusTone } from "@/lib/documents/types"
+import {
+  AGING_BUCKETS,
+  OPEN_ITEMS_SQL,
+  agingOf,
+  mapOpenInvoiceRow,
+  scopedParams,
+} from "@/lib/finance-receivables"
 import type {
   DocumentColumn,
   DocumentField,
@@ -211,8 +218,11 @@ async function finalize(
   const [branding, qr] = await Promise.all([
     loadBranding(db, companyId, draft.type),
     // A document that cannot be signed still has to print — a missing QR is a
-    // degraded document, an exception here would be no document at all.
-    buildDocumentQr({ type: draft.type, id: subjectId, companyId }).catch(() => undefined),
+    // degraded document, an exception here would be no document at all. Some
+    // types carry no QR at all by design; see NON_VERIFIABLE_TYPES.
+    NON_VERIFIABLE_TYPES.includes(draft.type)
+      ? Promise.resolve(undefined)
+      : buildDocumentQr({ type: draft.type, id: subjectId, companyId }).catch(() => undefined),
   ])
 
   return {
@@ -2093,6 +2103,189 @@ async function buildCommercialInvoice(
 }
 
 // ---------------------------------------------------------------------------
+// Statement of account — keyed on a CLIENT id, not an invoice
+//
+// The only document in the engine whose subject is a party rather than a
+// transaction. It is an OPEN-ITEM statement: every unpaid invoice as of the
+// moment it is printed, aged from its due date. It is deliberately not a
+// date-range statement — /documents/[type]/[id] carries one numeric subject and
+// no period, and an open-item statement is what a collections call and a client
+// query both actually need. A period statement would be a change to the route
+// contract, not to this builder.
+// ---------------------------------------------------------------------------
+
+async function buildClientStatement(
+  db: DocumentDBClient,
+  companyId: number,
+  clientId: number
+): Promise<DocumentResult> {
+  const clientRes = await db.query(
+    `SELECT c.id, c.client_code, c.client_name, c.company_legal_name, c.gst_number,
+            c.registered_address, c.city, c.state, c.pincode,
+            c.contact_person, c.contact_email, c.contact_phone
+     FROM clients c
+     WHERE c.company_id = $1 AND c.id = $2
+     LIMIT 1`,
+    [companyId, clientId]
+  )
+  if (!clientRes.rows.length) throw new DocumentNotFoundError("Client not found")
+  const client = clientRes.rows[0]
+
+  // Same query the receivables screen runs, on the engine's own transaction so
+  // the tenant context set by the route still applies.
+  const asOf = new Date().toISOString().slice(0, 10)
+  const openRes = await db.query(OPEN_ITEMS_SQL, scopedParams(companyId, clientId, { asOf }))
+  const openItems = openRes.rows.map(mapOpenInvoiceRow)
+  const aging = agingOf(openItems)
+
+  const outstanding = openItems.reduce((sum, item) => sum + item.balance, 0)
+  const overdue = openItems.reduce((sum, item) => sum + (item.days_overdue > 0 ? item.balance : 0), 0)
+  const oldest = openItems.reduce((max, item) => Math.max(max, item.days_overdue), 0)
+
+  // Lifetime position, for the client who wants to know what this statement sits
+  // against. Drafts and voids are excluded here too, so "billed" on the statement
+  // and "billed" on the receivables screen are the same number.
+  const totalsRes = await db.query(
+    `SELECT
+       COALESCE(SUM(COALESCE(ih.grand_total, 0)), 0)::numeric AS billed,
+       COALESCE(SUM(COALESCE(ih.paid_amount, 0)), 0)::numeric AS collected
+     FROM invoice_header ih
+     WHERE ih.company_id = $1
+       AND ih.client_id = $2
+       AND COALESCE(ih.status, '') <> ALL (ARRAY['DRAFT', 'VOID'])`,
+    [companyId, clientId]
+  )
+  const totals = totalsRes.rows[0] ?? {}
+
+  const billedTo = [
+    str(client.registered_address, ""),
+    str(client.city, ""),
+    str(client.state, ""),
+    str(client.pincode, ""),
+  ]
+    .filter(Boolean)
+    .join(", ")
+
+  // Nothing outstanding is a legitimate statement, not an error — a client who
+  // asks for one when they are square should get a sheet that says so.
+  const status = outstanding <= 0 ? "PAID" : overdue > 0 ? "OVERDUE" : "OPEN"
+
+  return finalize(
+    db,
+    companyId,
+    clientId,
+    { warehouseId: null, clientId: num(client.id) },
+    {
+      type: "client-statement",
+      title: "Statement of Account",
+      documentNumber: `SOA/${str(client.client_code, String(clientId))}/${asOf.replace(/-/g, "")}`,
+      documentDate: asOf,
+      warehouseLabel: "",
+      status: statusTone(status),
+      meta: [
+        { label: "Client", value: str(client.client_name) },
+        { label: "Client Code", value: str(client.client_code) },
+        { label: "Statement Date", value: asOf },
+        { label: "Basis", value: "Open items" },
+        { label: "Currency", value: "INR" },
+      ],
+      sections: [
+        {
+          kind: "party-cards",
+          cards: [
+            {
+              title: "Statement For",
+              fields: [
+                {
+                  label: "Customer",
+                  value: str(client.company_legal_name, "") || str(client.client_name),
+                },
+                { label: "Address", value: billedTo || "-" },
+                { label: "GSTIN", value: str(client.gst_number) },
+                { label: "Contact", value: str(client.contact_email) },
+              ],
+            },
+            {
+              title: "Position",
+              fields: [
+                { label: "Open Invoices", value: String(openItems.length) },
+                { label: "Outstanding", value: `₹ ${inr(outstanding)}` },
+                { label: "Of Which Overdue", value: `₹ ${inr(overdue)}` },
+                { label: "Oldest Item", value: oldest > 0 ? `${oldest} days past due` : "Not yet due" },
+              ],
+            },
+          ],
+        },
+        {
+          kind: "summary-tiles",
+          tiles: [
+            ...tile("Total Billed", `₹ ${inr(totals.billed)}`),
+            ...tile("Collected", `₹ ${inr(totals.collected)}`),
+            ...tile("Open Invoices", openItems.length),
+            ...tile("Outstanding", `₹ ${inr(outstanding)}`),
+            ...tile("Overdue", `₹ ${inr(overdue)}`),
+          ],
+        },
+        {
+          kind: "fields",
+          title: "Ageing Summary",
+          columns: 3,
+          fields: AGING_BUCKETS.map((bucket) => ({
+            label: bucket.key === "current" ? "Not Yet Due" : `${bucket.label} days`,
+            value: `₹ ${inr(aging[bucket.key])}`,
+          })),
+        },
+        {
+          kind: "table",
+          title: "Open Items",
+          caption: `All amounts in INR · aged from due date as at ${asOf}`,
+          emptyText: "No outstanding invoices. This account is fully settled.",
+          columns: [
+            { key: "invoice", label: "Invoice No.", width: "16%", mono: true },
+            { key: "period", label: "Period", width: "12%" },
+            { key: "invoice_date", label: "Invoice Date", width: "12%" },
+            { key: "due_date", label: "Due Date", width: "12%" },
+            { key: "age", label: "Days Overdue", width: "10%", align: "right" },
+            { key: "total", label: "Invoice Total", width: "13%", align: "right" },
+            { key: "paid", label: "Paid / Credited", width: "13%", align: "right" },
+            { key: "balance", label: "Balance Due", width: "12%", align: "right" },
+          ],
+          rows: openItems.map((item) => ({
+            invoice: item.invoice_number,
+            period: str(item.billing_period),
+            invoice_date: fmtDate(item.invoice_date),
+            due_date: fmtDate(item.due_date),
+            age: item.days_overdue > 0 ? item.days_overdue : "-",
+            total: inr(item.grand_total),
+            paid: inr(item.paid_amount + item.credit_note_total),
+            balance: inr(item.balance),
+          })),
+          totals: {
+            invoice: `Total — ${openItems.length} open ${openItems.length === 1 ? "item" : "items"}`,
+            balance: inr(outstanding),
+          },
+        },
+        {
+          kind: "fields",
+          title: "Amount in Words",
+          columns: 1,
+          fields: [{ label: "Total Outstanding", value: amountInWords(outstanding) }],
+        },
+        {
+          kind: "notes",
+          title: "Remittance",
+          text:
+            "Please quote the invoice numbers listed above on all remittances. Payments made after the statement date may not be reflected here; if an item shown has already been settled, contact accounts with the payment reference and we will reconcile it.",
+        },
+        signatures("Prepared By", "Verified By", "Authorized By", "Client Acknowledgement"),
+      ],
+      footerNote:
+        "This statement lists open items as at the statement date and is not a demand for payment of items already settled.",
+    }
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch manifest — keyed on an outbound_loads id
 //
 // SCHEMA NOTE: there is no trip or consolidation entity — outbound_loads is one
@@ -2290,6 +2483,7 @@ const BUILDERS: Partial<
   "inventory-adjustment-report": buildInventoryAdjustmentReport,
   "dispatch-manifest": buildDispatchManifest,
   "commercial-invoice": buildCommercialInvoice,
+  "client-statement": buildClientStatement,
   "job-card": buildJobCard,
   "dispatch-note": (db, companyId, id) => buildDoLineDocument(db, companyId, id, "dispatch-note"),
   "packing-slip": (db, companyId, id) => buildDoLineDocument(db, companyId, id, "packing-slip"),
@@ -2314,6 +2508,7 @@ export const DOCUMENT_SUBJECT: Record<
   | "invoice"
   | "stock-transfer"
   | "adjustment"
+  | "client"
 > = {
   "pick-list": "wave",
   "packing-list": "do",
@@ -2327,6 +2522,8 @@ export const DOCUMENT_SUBJECT: Record<
   "inventory-adjustment-report": "adjustment",
   "dispatch-manifest": "load",
   "commercial-invoice": "invoice",
+  // The only party-keyed document in the engine: [id] is a clients.id.
+  "client-statement": "client",
   "job-card": "do",
   "dispatch-note": "do",
   "packing-slip": "do",

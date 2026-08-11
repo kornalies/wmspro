@@ -36,11 +36,14 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   { href: "/grn/mobile-approvals", permissions: ["grn.mobile.approve"] },
   { href: "/grn", permissions: ["grn.manage"] },
   { href: "/do", permissions: ["do.manage"] },
-  // Printable documents (lib/documents) are all outbound paperwork, so they ride
-  // on the same permission as the delivery orders they describe. The API enforces
-  // this independently; this stops the page rendering a shell to someone whose
-  // fetch behind it will only ever 401.
-  { href: "/documents", permissions: ["do.manage"] },
+  // Printable documents (lib/documents) are mostly outbound paperwork, so they
+  // ride on the same permission as the delivery orders they describe — but the
+  // invoice and the statement of account are finance documents and a finance
+  // user must be able to reach them. This is any-of, and it only opens the page
+  // shell: the API gates per document type (DOCUMENT_ACCESS in
+  // lib/documents/types.ts), so a finance user reaching /documents/pick-list/1
+  // still gets nothing back.
+  { href: "/documents", permissions: ["do.manage", "finance.view"] },
   { href: "/stock/transfer", permissions: ["stock.putaway.manage"] },
   // Approving a variance writes stock off, so it needs the same permission as
   // any other stock mutation rather than a read-only stock role.
@@ -67,6 +70,7 @@ const ROUTE_PERMISSION_RULES: RoutePermissionRule[] = [
   { href: "/admin/security", permissions: ["audit.view"] },
   { href: "/admin/companies", permissions: ["admin.companies.manage"] },
   { href: "/finance/invoices", permissions: ["finance.view"] },
+  { href: "/finance/receivables", permissions: ["finance.view"] },
   { href: "/finance/billing", permissions: ["finance.view"] },
   { href: "/finance/contracts", permissions: ["finance.view"] },
   { href: "/finance/rates", permissions: ["finance.view"] },
