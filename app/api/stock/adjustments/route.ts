@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
     await db.query("BEGIN")
     await setTenantContext(db, session.companyId)
 
-    const adjustment = await createAdjustment(db, session.companyId, {
+    const { adjustment, warnings } = await createAdjustment(db, session.companyId, {
       clientId,
       warehouseId,
       reasonCode: String(body.reason_code ?? ""),
@@ -152,8 +152,9 @@ export async function POST(request: NextRequest) {
 
     await db.query("COMMIT")
     return ok(
-      adjustment,
-      `Adjustment ${adjustment.adjustment_number} raised — stock is unchanged until it is approved`
+      { ...adjustment, warnings },
+      `Adjustment ${adjustment.adjustment_number} raised — the units are quarantined, but nothing is written off until it is approved` +
+        (warnings.length ? `. ${warnings.length} unit(s) are promised elsewhere` : "")
     )
   } catch (error: unknown) {
     await db.query("ROLLBACK")

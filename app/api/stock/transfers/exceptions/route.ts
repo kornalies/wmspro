@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
     }
 
     const first = lost[0]
-    const adjustment = await createAdjustment(db, session.companyId, {
+    const { adjustment } = await createAdjustment(db, session.companyId, {
       clientId: first.client_id,
       // The units were last accountable to the sender: they never reached the
       // destination, so writing them off there would claim they arrived.

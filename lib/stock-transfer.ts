@@ -121,10 +121,16 @@ export function availableStockWhere(alias = "s", itemAlias = "i"): string {
  * the free-stock question about an approved line reports it as entirely
  * uncovered — the register said exactly that until this existed.
  *
+ * A unit this line already holds still drops out if an adjustment has since
+ * quarantined it (migration 076): a pallet reported damaged after the transfer
+ * was approved must not be loaded onto the truck. Same rule as the batch recall
+ * exclusion below — a hold survives competition, not a decision.
+ *
  * `lineExpr` is SQL so this works with a bind parameter or a joined column.
  */
 export function availableToLineWhere(lineExpr: string, alias = "s", itemAlias = "i"): string {
   return `${alias}.status = 'IN_STOCK'
+      AND ${alias}.adjustment_line_id IS NULL
       AND (${alias}.transfer_line_id = ${lineExpr} OR ${freeStockPredicate(alias)})
       AND ${allocatableStockPredicate(alias, itemAlias)}`
 }

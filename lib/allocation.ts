@@ -133,31 +133,47 @@ export function allocatableBatchPredicate(alias = "s"): string {
  * exclusion an operator on one DO can pack inventory another DO is holding, and
  * the second order then fails at commit with a shortage it did not cause.
  *
+ * Both pools exclude quarantined stock (migration 076). The free pool gets that
+ * from `freeStockPredicate`; the reserved pool has to say it itself, and that is
+ * where the quarantine earns its keep — a unit already allocated to this DO and
+ * then reported damaged drops out of the pack pool, so the adjustment has to be
+ * resolved instead of being packed over.
+ *
  * `lineExpr` is SQL, not a value, so this works both where the line is a bind
  * parameter (the commit path) and where it is a joined column (the pack pool).
  */
 export function reservableStockPredicate(alias = "s", lineExpr = "$1"): string {
   return `(
-    (${alias}.status = 'RESERVED' AND ${alias}.do_line_item_id = ${lineExpr})
+    (${alias}.status = 'RESERVED'
+      AND ${alias}.do_line_item_id = ${lineExpr}
+      AND ${alias}.adjustment_line_id IS NULL)
     OR ${freeStockPredicate(alias)}
   )`
 }
 
 /**
- * Stock nobody has claimed: on hand, and promised to neither a delivery order
- * nor a stock transfer.
+ * Stock nobody has claimed: on hand, promised to neither a delivery order nor a
+ * stock transfer, and with no open question hanging over it.
  *
- * `transfer_line_id` is the second claim (migration 072). It is a separate
- * column rather than a status because stock held for a transfer has not moved --
- * it is still on hand, still billable, still countable -- so the queries that
- * COUNT stock must keep seeing it and only the queries that CHOOSE stock must
- * skip it. This predicate is the boundary between those two groups: if a query
- * decides who gets a unit, it belongs here.
+ * `transfer_line_id` is the second claim (migration 072) and
+ * `adjustment_line_id` the third (migration 076). Both are separate columns
+ * rather than statuses because the stock has not moved -- it is still on hand,
+ * still billable, still countable -- so the queries that COUNT stock must keep
+ * seeing it and only the queries that CHOOSE stock must skip it. This predicate
+ * is the boundary between those two groups: if a query decides who gets a unit,
+ * it belongs here.
+ *
+ * The three are not the same kind of claim. A DO or transfer claim says someone
+ * will take this unit away; an adjustment claim says someone has reported it
+ * damaged, lost or expired and nobody should ship it until that is settled. They
+ * are spelled the same way here because the question this predicate answers --
+ * "may I choose this unit?" -- has the same answer for all three.
  */
 export function freeStockPredicate(alias = "s"): string {
   return `(${alias}.status = 'IN_STOCK'
     AND ${alias}.do_line_item_id IS NULL
-    AND ${alias}.transfer_line_id IS NULL)`
+    AND ${alias}.transfer_line_id IS NULL
+    AND ${alias}.adjustment_line_id IS NULL)`
 }
 
 /** Human-readable note for a rule, shown wherever allocation is presented. */
