@@ -120,9 +120,31 @@ async function readStock(companyId, serialIds) {
        WHERE company_id = $1 AND serial_number_id = ANY($2::int[]) AND movement_type = 'LOST'`,
       [companyId, serialIds]
     )
+    // Everything the write-off produced, whatever it was called. This module
+    // used to INSERT its own LOST row on top of the one the serial trigger had
+    // already written for the same status change, so a single missing unit
+    // appeared in the ledger twice — and counting only LOST rows could not see
+    // it, because the duplicate was classified ADJUSTMENT.
+    const post = await db.query(
+      `SELECT COUNT(*)::int n FROM stock_movements
+       WHERE company_id = $1 AND serial_number_id = ANY($2::int[])
+         AND movement_type <> 'RECEIVE'`,
+      [companyId, serialIds]
+    )
+    const adj = await db.query(
+      `SELECT h.status, h.source_module, h.source_ref, h.reason_code
+         FROM inventory_adjustment_header h
+         JOIN inventory_adjustment_serials s
+           ON s.adjustment_id = h.id AND s.company_id = h.company_id
+        WHERE h.company_id = $1 AND s.serial_id = ANY($2::int[])
+        GROUP BY h.id, h.status, h.source_module, h.source_ref, h.reason_code`,
+      [companyId, serialIds]
+    )
     return {
       byStatus: Object.fromEntries(s.rows.map((r) => [String(r.status), Number(r.n)])),
       lostMovements: Number(mv.rows[0].n),
+      writeOffMovements: Number(post.rows[0].n),
+      adjustments: adj.rows,
     }
   })
 }
@@ -214,6 +236,16 @@ async function main() {
   check("two serials cancelled", (stock.byStatus.CANCELLED ?? 0) === 2, JSON.stringify(stock.byStatus))
   check("three serials remain in stock", (stock.byStatus.IN_STOCK ?? 0) === STOCK_QTY - 2, JSON.stringify(stock.byStatus))
   check("write-off left a LOST movement per serial", stock.lostMovements === 2, `n=${stock.lostMovements}`)
+  check("and exactly one movement per serial, not two", stock.writeOffMovements === 2,
+    `n=${stock.writeOffMovements}`)
+  check("the write-off is in the adjustment register, not only in the ledger",
+    stock.adjustments.length === 1, JSON.stringify(stock.adjustments))
+  check("attributed to the count that caused it",
+    stock.adjustments[0]?.source_module === "CYCLE_COUNT" &&
+      stock.adjustments[0]?.reason_code === "COUNT_VARIANCE",
+    JSON.stringify(stock.adjustments[0]))
+  check("and already approved — the count approval was the approval",
+    stock.adjustments[0]?.status === "APPROVED", String(stock.adjustments[0]?.status))
 
   const replay = await api(`/stock/cycle-counts/submissions/${short.submission_id}/approve`, {
     method: "POST",

@@ -32,6 +32,26 @@ export async function getTransferSeparateApprover(
   return String(result.rows[0]?.flag ?? "").trim().toLowerCase() === "true"
 }
 
+/**
+ * Whether an inventory adjustment must be approved by someone other than its
+ * raiser.
+ *
+ * Same shape and same default as {@link getTransferSeparateApprover}, for the
+ * same reasons — RBAC carries the structural half (OPERATOR does not hold
+ * `stock.adjustment.approve`, migration 077) and a small site must still be able
+ * to write off a broken pallet.
+ */
+export async function getAdjustmentSeparateApprover(
+  db: DBClient,
+  companyId: number
+): Promise<boolean> {
+  const result = await db.query(
+    `SELECT settings->>'adjustment_separate_approver' AS flag FROM companies WHERE id = $1`,
+    [companyId]
+  )
+  return String(result.rows[0]?.flag ?? "").trim().toLowerCase() === "true"
+}
+
 export const OUTBOUND_BILLING_TRIGGERS = ["DISPATCH", "GOODS_ISSUE"] as const
 export type OutboundBillingTrigger = (typeof OUTBOUND_BILLING_TRIGGERS)[number]
 

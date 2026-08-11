@@ -1841,7 +1841,11 @@ async function buildInventoryAdjustmentReport(
       ],
       footerNote: applied
         ? "Stock records were updated on approval. Each serial listed above carries a corresponding stock movement."
-        : "This adjustment has NOT been applied to stock. Quantities shown are proposed until approved.",
+        : str(adjustment.status) === "DRAFT"
+          ? // A draft has not changed any figure, but it is not inert either:
+            // raising it quarantines the units, so the reader is told both.
+            "This adjustment has NOT been applied to stock. Quantities shown are proposed until approved; the units listed are held out of picking in the meantime."
+          : `This adjustment was ${str(adjustment.status).toLowerCase()} and never applied to stock. No figure changed and the units listed were released.`,
     }
   )
 }

@@ -94,9 +94,20 @@ async function seed(fixtures) {
       )
       const destWarehouseId = Number(dest.rows[0].id)
 
+      // A receipt of OUR item, for this client at this warehouse, rather than
+      // whatever GRN line happened to be last in the table. Found stock has to
+      // be attributed to a receipt of the same item, so a borrowed line would
+      // make that path untestable — and would be a lie about where the units
+      // came from.
+      const grn = await db.query(
+        `INSERT INTO grn_header (company_id, grn_number, warehouse_id, client_id, grn_date, status)
+         VALUES ($1, $2, $3, $4, CURRENT_DATE - INTERVAL '6 days', 'CONFIRMED') RETURNING id`,
+        [companyId, `GRN-STN-${SUFFIX}`, warehouseId, clientId]
+      )
       const grnLine = await db.query(
-        `SELECT id FROM grn_line_items WHERE company_id = $1 ORDER BY id DESC LIMIT 1`,
-        [companyId]
+        `INSERT INTO grn_line_items (company_id, grn_header_id, line_number, item_id, quantity, uom)
+         VALUES ($1, $2, 1, $3, 10, 'PCS') RETURNING id`,
+        [companyId, Number(grn.rows[0].id), itemId]
       )
       const grnLineId = Number(grnLine.rows[0]?.id)
       if (!grnLineId) throw new Error("No GRN line fixture to hang stock off")
@@ -250,6 +261,86 @@ async function setOperatorApprove(companyId, granted) {
             AND p.permission_key = 'stock.transfer.approve'`
       )
     }
+  })
+}
+
+/**
+ * Grant or revoke an arbitrary permission on the OPERATOR role.
+ *
+ * Same idea as {@link setOperatorApprove}: toggle one key and re-test the same
+ * user, so the refusal is proven to come from that key and nothing else.
+ */
+async function setOperatorPermission(companyId, key, granted) {
+  await withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+    await db.query(
+      `INSERT INTO rbac_permissions (permission_key, permission_name, is_active)
+       VALUES ($1, $1, true) ON CONFLICT (permission_key) DO NOTHING`,
+      [key]
+    )
+    if (granted) {
+      await db.query(
+        `INSERT INTO rbac_role_permissions (role_id, permission_id)
+         SELECT r.id, p.id FROM rbac_roles r
+           JOIN rbac_permissions p ON p.permission_key = $1
+          WHERE r.role_code = 'OPERATOR'
+         ON CONFLICT DO NOTHING`,
+        [key]
+      )
+    } else {
+      await db.query(
+        `DELETE FROM rbac_role_permissions rp
+          USING rbac_roles r, rbac_permissions p
+          WHERE rp.role_id = r.id AND rp.permission_id = p.id
+            AND r.role_code = 'OPERATOR' AND p.permission_key = $1`,
+        [key]
+      )
+    }
+  })
+}
+
+/** Fresh units at the source warehouse, for the adjustment-flow section. */
+async function seedUnits(seeded, prefix, count) {
+  return withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(seeded.companyId)])
+    const names = []
+    for (let i = 1; i <= count; i++) {
+      const serial = `${prefix}-${i}`
+      await db.query(
+        `INSERT INTO stock_serial_numbers (
+           company_id, serial_number, item_id, client_id, warehouse_id, status,
+           received_date, grn_line_item_id, batch_number, expiry_date
+         )
+         VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE - ($6 || ' days')::interval,
+                 $7, $8, CURRENT_DATE + INTERVAL '300 days')`,
+        [
+          seeded.companyId,
+          serial,
+          seeded.itemId,
+          seeded.clientId,
+          seeded.warehouseId,
+          String(10 - i),
+          seeded.grnLineId,
+          `BATCH-STN-${SUFFIX}`,
+        ]
+      )
+      names.push(serial)
+    }
+    return names
+  })
+}
+
+/** Which serial, if any, a transfer line is currently holding. */
+async function heldByTransfer(companyId, itemId) {
+  return withDb(async (db) => {
+    await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyId)])
+    const r = await db.query(
+      `SELECT serial_number FROM stock_serial_numbers
+        WHERE company_id = $1 AND item_id = $2 AND transfer_line_id IS NOT NULL
+        ORDER BY id LIMIT 1`,
+      [companyId, itemId]
+    )
+    return r.rows[0]?.serial_number ?? null
   })
 }
 
@@ -611,6 +702,29 @@ async function main() {
 
     console.log("\n== Inventory adjustment: a draft changes nothing ==")
     const missingSerial = `SER-STN-${SUFFIX}-3`
+
+    // The exceptions worklist has already drafted a write-off for this unit,
+    // and raising one quarantines the serial, so a second write-off for the
+    // same unit is now refused — which is the point of the quarantine. Withdraw
+    // the drafted one and raise the manual equivalent, as an operator who wants
+    // to word the reason themselves would.
+    const dupOfException = await api("/stock/adjustments", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        warehouse_id: seeded.warehouseId,
+        reason_code: "LOSS",
+        lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [missingSerial] }],
+      },
+    })
+    check("a unit already named on an open write-off cannot be written off again",
+      dupOfException.status === 400,
+      String(dupOfException.json?.error?.message ?? "").slice(0, 70))
+    must("withdraw the drafted write-off", await api(`/stock/adjustments/${draft.adjustment.id}`, {
+      method: "POST", token, body: { action: "cancel" },
+    }))
+
     const adjustment = must("create adjustment", await api("/stock/adjustments", {
       method: "POST",
       token,
@@ -808,6 +922,189 @@ async function main() {
     check("a rejected adjustment leaves its stock alone", rejectedSerial === "IN_STOCK",
       String(rejectedSerial))
 
+    console.log("\n== The form can only offer what the warehouse holds ==")
+    const units = await seedUnits(seeded, `SER-ADJ-${SUFFIX}`, 3)
+    const availPath =
+      `/stock/adjustments/availability?client_id=${seeded.clientId}` +
+      `&warehouse_id=${seeded.warehouseId}`
+
+    const availItems = must("adjustment availability", await api(availPath, { token }))
+    const offeredItem = availItems.items.find((r) => Number(r.item_id) === seeded.itemId)
+    check("the item list is what the warehouse actually holds",
+      Number(offeredItem?.adjustable) === 3, JSON.stringify(offeredItem))
+
+    const availSerials = must("adjustable serials",
+      await api(`${availPath}&item_id=${seeded.itemId}`, { token }))
+    check("it offers the units themselves, not a free-text box",
+      availSerials.serials.length === 3, String(availSerials.serials.length))
+    check("and none of them read as the literal '//' location",
+      availSerials.serials.every((s) => s.bin_location !== "//"),
+      JSON.stringify(availSerials.serials.map((s) => s.bin_location)))
+    check("nothing is claimed yet",
+      availSerials.serials.every((s) => s.claimed_by === null))
+
+    const searched = must("filtered serials",
+      await api(`${availPath}&item_id=${seeded.itemId}&q=${encodeURIComponent(units[1])}`, { token }))
+    check("the search happens on the server, not over a truncated page",
+      searched.serials.length === 1 && searched.serials[0].serial_number === units[1],
+      JSON.stringify(searched.serials.map((s) => s.serial_number)))
+
+    const receipts = must("receipt lines",
+      await api(`${availPath}&item_id=${seeded.itemId}&mode=receipts`, { token }))
+    check("found stock can be told which receipt it belongs to",
+      receipts.receipts.some((r) => Number(r.grn_line_item_id) === seeded.grnLineId),
+      String(receipts.receipts.length))
+
+    console.log("\n== Raising quarantines the stock ==")
+    check("all three units start allocatable", (await doAvailability(token, seeded)) === 3)
+
+    const quarantine = must("quarantine draft", await api("/stock/adjustments", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        warehouse_id: seeded.warehouseId,
+        reason_code: "DAMAGE",
+        reason: "Crushed on the pallet",
+        lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [units[0], units[1]] }],
+      },
+    }))
+    check("it is still only a draft", quarantine.status === "DRAFT", quarantine.status)
+    check("a delivery order can no longer see the reported units",
+      (await doAvailability(token, seeded)) === 1, "expected 1")
+
+    const quarantinedStatus = await withDb(async (db) => {
+      await db.query("SELECT set_config('app.company_id', $1, false)", [String(seeded.companyId)])
+      const r = await db.query(
+        `SELECT status, adjustment_line_id FROM stock_serial_numbers
+          WHERE company_id = $1 AND serial_number = $2`,
+        [seeded.companyId, units[0]]
+      )
+      return r.rows[0]
+    })
+    // The whole reason the hold is a column: a quarantined unit has not moved,
+    // so it is still on hand, still countable and still billable.
+    check("quarantined stock is still IN_STOCK, not written off",
+      quarantinedStatus.status === "IN_STOCK", String(quarantinedStatus.status))
+    check("and it carries the adjustment line that claimed it",
+      quarantinedStatus.adjustment_line_id !== null)
+
+    const stillOffered = must("availability after quarantine",
+      await api(`${availPath}&item_id=${seeded.itemId}`, { token }))
+    check("the raise form stops offering units already under adjustment",
+      stillOffered.serials.length === 1, String(stillOffered.serials.length))
+
+    const doubleReport = await api("/stock/adjustments", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        warehouse_id: seeded.warehouseId,
+        reason_code: "LOSS",
+        lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [units[0]] }],
+      },
+    })
+    check("the same unit cannot be reported twice", doubleReport.status === 400,
+      String(doubleReport.json?.error?.message ?? "").slice(0, 70))
+
+    console.log("\n== Withdrawing puts the stock back ==")
+    const withdrawn = must("withdraw", await api(`/stock/adjustments/${quarantine.id}`, {
+      method: "POST", token, body: { action: "cancel" },
+    }))
+    check("withdrawal is recorded as CANCELLED, not REJECTED",
+      withdrawn.adjustment.status === "CANCELLED", String(withdrawn.adjustment.status))
+    check("it reports what it released", Number(withdrawn.released) === 2,
+      String(withdrawn.released))
+    check("the units are allocatable again", (await doAvailability(token, seeded)) === 3)
+    const lateApprove = await api(`/stock/adjustments/${quarantine.id}`, {
+      method: "POST", token, body: { action: "approve" },
+    })
+    check("a withdrawn adjustment cannot then be approved", lateApprove.status === 409,
+      `status=${lateApprove.status}`)
+
+    console.log("\n== Writing off stock somebody else has promised ==")
+    // A real hold, taken by a real transfer, rather than a column poked in the
+    // database: the point is that the two features see each other.
+    const claimTransfer = must("transfer to hold stock", await api("/stock/transfers", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        from_warehouse_id: seeded.warehouseId,
+        to_warehouse_id: seeded.destWarehouseId,
+        lines: [{ item_id: seeded.itemId, quantity: 1 }],
+      },
+    }))
+    must("approve holding transfer", await api(`/stock/transfers/${claimTransfer.id}`, {
+      method: "POST", token, body: { action: "approve" },
+    }))
+    const heldSerial = await heldByTransfer(seeded.companyId, seeded.itemId)
+    check("the transfer is holding a unit", Boolean(heldSerial), String(heldSerial))
+
+    const claimedAvail = must("availability with a claim",
+      await api(`${availPath}&item_id=${seeded.itemId}`, { token }))
+    const heldRow = claimedAvail.serials.find((s) => s.serial_number === heldSerial)
+    check("the picker says who is holding it",
+      String(heldRow?.claimed_by ?? "").includes(String(claimTransfer.transfer_number)),
+      String(heldRow?.claimed_by))
+
+    const overClaim = must("adjustment over a claim", await api("/stock/adjustments", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        warehouse_id: seeded.warehouseId,
+        reason_code: "DAMAGE",
+        reason: "Damaged after it was promised",
+        lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [heldSerial] }],
+      },
+    }))
+    // Damage happens to stock that is already sold. Refusing to record it would
+    // be the wrong way round; the control is at approval.
+    check("reporting damage on promised stock is allowed", overClaim.status === "DRAFT",
+      String(overClaim.status))
+    check("but the raiser is told about the claim", (overClaim.warnings ?? []).length === 1,
+      JSON.stringify(overClaim.warnings))
+
+    const blind = await api(`/stock/adjustments/${overClaim.id}`, {
+      method: "POST", token, body: { action: "approve" },
+    })
+    check("approving it blind is refused", blind.status === 409, `status=${blind.status}`)
+    check("and the refusal names the order that loses the stock",
+      String(blind.json?.error?.message ?? "").includes(String(claimTransfer.transfer_number)),
+      String(blind.json?.error?.message ?? "").slice(0, 90))
+
+    const adjDetail = must("adjustment detail",
+      await api(`/stock/adjustments/${overClaim.id}`, { token }))
+    check("the approver can see the serials before deciding",
+      adjDetail.lines[0].serials.some((s) => s.serial_number === heldSerial),
+      JSON.stringify(adjDetail.lines[0].serials))
+    check("and the claims are on the same payload", adjDetail.claims.length === 1,
+      JSON.stringify(adjDetail.claims))
+
+    const acknowledged = must("approve with acknowledgement",
+      await api(`/stock/adjustments/${overClaim.id}`, {
+        method: "POST", token, body: { action: "approve", acknowledge_claims: true },
+      }))
+    check("acknowledging is what lets it through", Number(acknowledged.decreased) === 1,
+      String(acknowledged.decreased))
+    check("and approval reports every claim it broke",
+      acknowledged.released_claims.length === 1, JSON.stringify(acknowledged.released_claims))
+    const afterClaimBreak = await withDb(async (db) => {
+      await db.query("SELECT set_config('app.company_id', $1, false)", [String(seeded.companyId)])
+      const r = await db.query(
+        `SELECT status, transfer_line_id, adjustment_line_id FROM stock_serial_numbers
+          WHERE company_id = $1 AND serial_number = $2`,
+        [seeded.companyId, heldSerial]
+      )
+      return r.rows[0]
+    })
+    check("the written-off unit is CANCELLED", afterClaimBreak.status === "CANCELLED",
+      String(afterClaimBreak.status))
+    check("and holds nothing afterwards",
+      afterClaimBreak.transfer_line_id === null && afterClaimBreak.adjustment_line_id === null,
+      JSON.stringify(afterClaimBreak))
+
     console.log("\n== Approving is not an operator's job ==")
     // Approval places a real hold on inventory (migration 072), so it is no
     // longer the same permission as raising or picking.
@@ -871,9 +1168,77 @@ async function main() {
       await api(`/stock/transfers/${Number(opRaised.json?.data?.id)}`, {
         method: "POST", token, body: { action: "cancel" },
       })
+
+      // The same control on the more dangerous of the two: an approved transfer
+      // moves stock between our own warehouses, an approved adjustment destroys
+      // it (migration 077).
+      await setOperatorPermission(seeded.companyId, "stock.adjustment.approve", false)
+      const opAdjToken = await operatorLogin()
+      const opAdj = await api("/stock/adjustments", {
+        method: "POST",
+        token: opAdjToken,
+        body: {
+          client_id: seeded.clientId,
+          warehouse_id: seeded.warehouseId,
+          reason_code: "DAMAGE",
+          reason: "Reported by the operator who found it",
+          lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [units[2]] }],
+        },
+      })
+      check("an operator can still report damage", opAdj.status === 200, `status=${opAdj.status}`)
+
+      const opAdjId = Number(opAdj.json?.data?.id)
+      const opApproveAdj = await api(`/stock/adjustments/${opAdjId}`, {
+        method: "POST", token: opAdjToken, body: { action: "approve" },
+      })
+      check("but cannot approve their own write-off",
+        String(opApproveAdj.json?.error?.message ?? "").includes("Insufficient permissions"),
+        `status=${opApproveAdj.status}`)
+
+      // Withdrawing your own request is not an authority, so it must not need
+      // the approver's permission.
+      const opWithdraw = await api(`/stock/adjustments/${opAdjId}`, {
+        method: "POST", token: opAdjToken, body: { action: "cancel" },
+      })
+      check("an operator can withdraw what they raised", opWithdraw.status === 200,
+        `status=${opWithdraw.status}`)
+
+      await setOperatorPermission(seeded.companyId, "stock.adjustment.approve", true)
+      const adjGrantedToken = await operatorLogin()
+      const opAdj2 = await api("/stock/adjustments", {
+        method: "POST",
+        token: adjGrantedToken,
+        body: {
+          client_id: seeded.clientId,
+          warehouse_id: seeded.warehouseId,
+          reason_code: "DAMAGE",
+          lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [units[2]] }],
+        },
+      })
+      const nowApproved = await api(`/stock/adjustments/${Number(opAdj2.json?.data?.id)}`, {
+        method: "POST", token: adjGrantedToken, body: { action: "approve" },
+      })
+      check("granting stock.adjustment.approve is what unblocks it",
+        !String(nowApproved.json?.error?.message ?? "").includes("Insufficient permissions"),
+        `status=${nowApproved.status}`)
+      await setOperatorPermission(seeded.companyId, "stock.adjustment.approve", false)
     }
 
     console.log("\n== The documents ==")
+    // Left open on purpose: the draft report has to be checked while it is still
+    // a draft, and its wording is different from a rejected one.
+    const openDraft = must("open draft for the report", await api("/stock/adjustments", {
+      method: "POST",
+      token,
+      body: {
+        client_id: seeded.clientId,
+        warehouse_id: seeded.warehouseId,
+        reason_code: "DAMAGE",
+        reason: "Awaiting a decision",
+        lines: [{ item_id: seeded.itemId, direction: "DECREASE", serials: [units[1]] }],
+      },
+    }))
+    const opAdjDraftId = openDraft.id
     const stn = must("stock transfer note",
       await api(`/documents/stock-transfer-note/${transferId}`, { token }))
     check("the transfer note renders", stn.type === "stock-transfer-note", stn.type)
@@ -891,10 +1256,20 @@ async function main() {
       iarText.includes(`SER-STN-${SUFFIX}-1`))
     check("it states that stock was updated", iarText.includes("Stock Updated"))
 
-    const draftDoc = must("draft adjustment report",
+    const draftDoc = must("rejected adjustment report",
       await api(`/documents/inventory-adjustment-report/${toReject.id}`, { token }))
-    check("a report for an unapproved adjustment says so",
-      JSON.stringify(draftDoc).includes("NOT been applied"))
+    check("a report for a rejected adjustment says it never applied",
+      JSON.stringify(draftDoc).includes("rejected and never applied to stock"),
+      String(draftDoc.footerNote ?? "").slice(0, 80))
+
+    // A draft says something different: nothing has changed, but the units are
+    // held, so the reader is not told the paperwork is free.
+    const pendingDoc = must("draft adjustment report",
+      await api(`/documents/inventory-adjustment-report/${opAdjDraftId}`, { token }))
+    check("a report for a draft says it is proposed and the stock is held",
+      JSON.stringify(pendingDoc).includes("NOT been applied") &&
+        JSON.stringify(pendingDoc).includes("held out of picking"),
+      String(pendingDoc.footerNote ?? "").slice(0, 80))
 
     console.log("\n== Access control ==")
     check("unauthenticated transfer list rejected", (await api("/stock/transfers")).status === 401)
@@ -919,6 +1294,11 @@ async function main() {
         [TEARDOWN.companyId, TEARDOWN.itemIds]
       )
       await deleteTestFixtures(db, TEARDOWN)
+      // After the serials, which carry a NOT NULL reference to the receipt line.
+      await db.query(
+        `DELETE FROM grn_header WHERE company_id = $1 AND grn_number LIKE 'GRN-STN-%'`,
+        [TEARDOWN.companyId]
+      )
       await db.query(`DELETE FROM warehouses WHERE company_id = $1 AND warehouse_code LIKE $2`, [
         TEARDOWN.companyId,
         `WH-STN-%`,
@@ -932,7 +1312,7 @@ async function main() {
           USING rbac_roles r, rbac_permissions p
           WHERE rp.role_id = r.id AND rp.permission_id = p.id
             AND r.role_code = 'OPERATOR'
-            AND p.permission_key = 'stock.transfer.approve'`
+            AND p.permission_key IN ('stock.transfer.approve', 'stock.adjustment.approve')`
       )
       await db.query(
         `UPDATE users SET is_active = false WHERE company_id = $1 AND username = 'op_stn_fixture'`,

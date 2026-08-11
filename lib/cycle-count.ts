@@ -17,9 +17,18 @@
  *     is closed, and the extra units have to arrive through a receipt like any
  *     other stock. This is a deliberate refusal, not an omission.
  *
- * Every write-off leaves a stock_movements row of type LOST, so a cycle count
- * adjustment is auditable next to every other stock movement.
+ * A shortage is applied by raising and immediately approving an inventory
+ * adjustment (source_module CYCLE_COUNT), not by cancelling serials here. Two
+ * reasons. The register that answers "why did my stock figure move" could not
+ * see count variance at all, which is the single largest source of such moves.
+ * And this module used to INSERT its own stock_movements row on top of the one
+ * fn_track_serial_movements already wrote for the same status change, so every
+ * count-driven write-off appeared in the ledger twice — the trigger is the
+ * ledger's only writer, and lib/inventory-adjustment.ts stamps the row it wrote
+ * rather than adding another.
  */
+
+import { approveAdjustment, createAdjustment } from "@/lib/inventory-adjustment"
 
 export type CycleCountDBClient = {
   query: (
@@ -226,6 +235,9 @@ export async function applyVariance(
   if (args.decision === "APPROVED" && discrepancy < 0) {
     const shortfall = Math.abs(discrepancy)
     // Oldest first: deterministic, and consistent with how stock is consumed.
+    // Units already quarantined by an open adjustment are skipped — somebody has
+    // a write-off in flight for them and taking them here would count the same
+    // loss twice.
     const serials = await db.query(
       `SELECT s.id, s.serial_number, s.item_id, s.client_id, s.warehouse_id, s.zone_id
        FROM stock_serial_numbers s
@@ -235,45 +247,58 @@ export async function applyVariance(
          AND s.bin_location = $3
          AND i.item_code = $4
          AND s.status IN ('IN_STOCK', 'RESERVED')
+         AND s.adjustment_line_id IS NULL
        ORDER BY s.received_date ASC NULLS LAST, s.id ASC
        LIMIT $5
        FOR UPDATE`,
       [args.companyId, num(sub.warehouse_id), String(sub.bin_id), String(sub.sku), shortfall]
     )
 
-    for (const serial of serials.rows) {
-      await db.query(
-        `UPDATE stock_serial_numbers
-         SET status = 'CANCELLED', do_line_item_id = NULL, transfer_line_id = NULL,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE company_id = $1 AND id = $2`,
-        [args.companyId, num(serial.id)]
-      )
-      await db.query(
-        `INSERT INTO stock_movements (
-           company_id, movement_number, movement_date, serial_number_id, serial_number,
-           item_id, client_id, movement_type, from_warehouse_id, from_zone_id,
-           from_status, to_status, quantity, reference_number, reason, notes,
-           created_by, is_system_generated
-         )
-         VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, $6, 'LOST', $7, $8,
-                 'IN_STOCK', 'CANCELLED', 1, $9, $10, $11, $12, true)`,
-        [
-          args.companyId,
-          `CC-ADJ-${String(sub.id).slice(0, 8)}-${num(serial.id)}`,
-          num(serial.id),
-          String(serial.serial_number),
-          num(serial.item_id),
-          num(serial.client_id),
-          num(serial.warehouse_id),
-          serial.zone_id ?? null,
-          `CC-${String(sub.id).slice(0, 8)}`,
-          "Cycle count shortage written off after approval",
-          `bin=${String(sub.bin_id)} sku=${String(sub.sku)} expected=${expected} counted=${counted}`,
-          args.userId,
-        ]
-      )
-      adjustedSerialCount++
+    if (serials.rows.length) {
+      // The shapes differ only in generics — both are a live pg client — and
+      // widening one of the two public DB types to satisfy the other would be a
+      // bigger change than the cast it saves.
+      const adjDb = db as unknown as Parameters<typeof createAdjustment>[0]
+      const ref = `CC-${String(sub.id).slice(0, 8)}`
+
+      const { adjustment } = await createAdjustment(adjDb, args.companyId, {
+        clientId: num(serials.rows[0].client_id) || num(sub.client_id),
+        warehouseId: num(sub.warehouse_id),
+        reasonCode: "COUNT_VARIANCE",
+        reason: `Cycle count shortage in ${String(sub.bin_id)}: expected ${expected}, counted ${counted}`,
+        referenceNo: ref,
+        sourceModule: "CYCLE_COUNT",
+        sourceRef: String(sub.id),
+        lines: [
+          {
+            item_id: num(serials.rows[0].item_id),
+            direction: "DECREASE" as const,
+            serials: serials.rows.map((s) => String(s.serial_number)),
+            remarks: `bin=${String(sub.bin_id)} sku=${String(sub.sku)}`,
+          },
+        ],
+        userId: args.userId,
+      })
+
+      // Approved in the same breath, deliberately. The supervisor deciding this
+      // submission IS the approval — routing count variance into a second queue
+      // would stall counts behind paperwork and change a workflow nobody asked to
+      // change. What the adjustment adds is the record: until now a count-driven
+      // write-off existed only as a movement row, so the register that answers
+      // "why did my stock figure move" could not see the single largest source of
+      // such moves. acknowledgeClaims is true because the stock is physically
+      // missing — refusing to write it off would not bring it back for the
+      // delivery order holding it.
+      const approved = await approveAdjustment(adjDb, args.companyId, Number(adjustment.id), {
+        userId: args.userId,
+        acknowledgeClaims: true,
+      })
+      adjustedSerialCount = approved.decreased
+      if (approved.releasedClaims.length) {
+        note = `${approved.releasedClaims.length} of the missing units were promised to ${[
+          ...new Set(approved.releasedClaims.map((c) => c.claimed_by)),
+        ].join(", ")}; those orders are now short. Adjustment ${adjustment.adjustment_number}.`
+      }
     }
 
     if (adjustedSerialCount < shortfall) {

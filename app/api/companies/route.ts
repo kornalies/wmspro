@@ -45,6 +45,8 @@ const updateCompanySchema = z.object({
       // Require a stock transfer to be approved by someone other than its
       // raiser. Absent = off, which is the behaviour before migration 075.
       transfer_separate_approver: z.boolean().optional(),
+      // Same, for inventory adjustments. Absent = off (migration 077).
+      adjustment_separate_approver: z.boolean().optional(),
     })
     .optional(),
 })
