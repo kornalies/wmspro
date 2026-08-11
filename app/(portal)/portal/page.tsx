@@ -29,7 +29,18 @@ type PortalSummary = {
     total_invoices?: number
     overdue_invoices?: number
     total_billed?: number
+    collected_amount?: number
     outstanding_amount?: number
+    overdue_amount?: number
+    open_items?: number
+    aged_as_of?: string
+    aging?: {
+      current?: number
+      bucket_1_30?: number
+      bucket_31_60?: number
+      bucket_61_90?: number
+      bucket_90_plus?: number
+    }
   }
   disputes?: {
     total_disputes?: number
@@ -138,6 +149,18 @@ export default function ClientPortalPage() {
   const totalInvoices = Number(summary?.billing?.total_invoices ?? 0)
   const overdueInvoices = Number(summary?.billing?.overdue_invoices ?? 0)
   const outstandingAmount = Number(summary?.billing?.outstanding_amount ?? 0)
+  const overdueAmount = Number(summary?.billing?.overdue_amount ?? 0)
+  const openItems = Number(summary?.billing?.open_items ?? 0)
+  const agedAsOf = String(summary?.billing?.aged_as_of ?? "")
+  // Ageing runs from each invoice's due date. Labelled "Not yet due" rather than
+  // "Current" because a client reading their own statement is not an accountant.
+  const agingBands = [
+    { label: "Not yet due", value: Number(summary?.billing?.aging?.current ?? 0), tone: "text-emerald-700" },
+    { label: "1-30 days", value: Number(summary?.billing?.aging?.bucket_1_30 ?? 0), tone: "text-amber-700" },
+    { label: "31-60 days", value: Number(summary?.billing?.aging?.bucket_31_60 ?? 0), tone: "text-orange-700" },
+    { label: "61-90 days", value: Number(summary?.billing?.aging?.bucket_61_90 ?? 0), tone: "text-red-600" },
+    { label: "90+ days", value: Number(summary?.billing?.aging?.bucket_90_plus ?? 0), tone: "text-red-700" },
+  ]
   const totalDisputes = Number(summary?.disputes?.total_disputes ?? 0)
   const openDisputes = Number(summary?.disputes?.open_disputes ?? 0)
   const slaTargetHours = Number(summary?.sla?.dispatch_target_hours ?? 48)
@@ -386,7 +409,11 @@ export default function ClientPortalPage() {
               <p className="text-xs uppercase tracking-wide text-neutral-500">Billing</p>
               <p className="mt-2 text-4xl font-semibold">{formatCurrencyINR(outstandingAmount)}</p>
               <p className="text-sm text-neutral-600">{totalInvoices} invoices - {overdueInvoices} overdue</p>
-              <span className="mt-2 inline-block rounded-full bg-emerald-100 px-3 py-0.5 text-xs font-medium text-emerald-700">
+              <span
+                className={`mt-2 inline-block rounded-full px-3 py-0.5 text-xs font-medium ${
+                  overdueInvoices > 0 ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                }`}
+              >
                 {overdueInvoices > 0 ? "Needs attention" : "Clear"}
               </span>
             </article>
@@ -400,6 +427,33 @@ export default function ClientPortalPage() {
               </span>
             </article>
           </section>
+
+          {openItems > 0 && (
+            <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm uppercase tracking-wide text-neutral-600">Outstanding by Age</p>
+                <p className="text-xs text-neutral-500">
+                  {openItems} open {openItems === 1 ? "invoice" : "invoices"}
+                  {agedAsOf ? ` - aged from due date as at ${agedAsOf}` : ""}
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-5">
+                {agingBands.map((band) => (
+                  <div key={band.label} className="rounded-xl border border-neutral-200 p-3">
+                    <p className="text-xs text-neutral-500">{band.label}</p>
+                    <p className={`mt-1 text-xl font-semibold ${band.value > 0 ? band.tone : "text-neutral-300"}`}>
+                      {formatCurrencyINR(band.value)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              {overdueAmount > 0 && (
+                <p className="mt-3 text-sm text-red-700">
+                  {formatCurrencyINR(overdueAmount)} of this is past its due date.
+                </p>
+              )}
+            </section>
+          )}
 
           <section className="grid gap-4 xl:grid-cols-2">
             <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">

@@ -50,8 +50,15 @@ type SummarySource = {
  * Where each type's identity lives. Several types share a subject record (a job
  * card, dispatch note and packing slip are all views of one DO), which is why
  * the title is carried here rather than derived from the table.
+ *
+ * Partial by design: a type with no entry has no public verification page, and
+ * loadDocumentSummary returns null for it. `client-statement` is the one such
+ * type — its subject is a client rather than a transaction, so the only thing
+ * this page could show a stranger is the client's own identity, which is exactly
+ * what a public endpoint must not disclose. Statements are printed without a QR
+ * (see NON_VERIFIABLE_TYPES in lib/documents/types.ts).
  */
-const SOURCES: Record<DocumentType, SummarySource> = {
+const SOURCES: Partial<Record<DocumentType, SummarySource>> = {
   "pick-list": {
     title: "Pick List",
     table: "do_wave_header",

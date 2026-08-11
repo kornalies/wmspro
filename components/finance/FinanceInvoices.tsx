@@ -515,14 +515,6 @@ export function FinanceInvoices() {
     for (const invoice of invoices) map.set(invoice.client_id, invoice.client_name)
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))
   }, [invoices])
-  const summary = payload?.summary ?? {
-    totalRevenue: 0,
-    totalPaid: 0,
-    totalOutstanding: 0,
-    totalTax: 0,
-    totalInvoiceValue: 0,
-    overdueCount: 0,
-  }
   const filteredInvoices = useMemo(() => {
     const byDate = (value: string, from: string, to: string) => {
       const date = value?.slice(0, 10)
@@ -563,6 +555,36 @@ export function FinanceInvoices() {
         }
       })
   }, [clientFilter, dueFrom, dueTo, invoiceFrom, invoiceTo, invoices, sortKey, statusFilter])
+
+  /**
+   * The tiles describe the rows on screen.
+   *
+   * They used to read payload.summary, which the server computes over every
+   * invoice the query returned and which therefore ignored the client, date and
+   * partially-paid filters applied below it — so someone filtering to one client
+   * read that client's invoices under the whole tenant's outstanding. Folding
+   * from filteredInvoices is what makes the header and the table the same story.
+   */
+  const summary = useMemo(
+    () => ({
+      totalRevenue: filteredInvoices.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0),
+      totalPaid: filteredInvoices.reduce((sum, inv) => sum + Number(inv.paid_amount || 0), 0),
+      totalOutstanding: filteredInvoices.reduce((sum, inv) => sum + Number(inv.balance || 0), 0),
+      totalTax: filteredInvoices.reduce((sum, inv) => sum + Number(inv.total_tax_amount || 0), 0),
+      totalInvoiceValue: filteredInvoices.reduce(
+        (sum, inv) => sum + Number(inv.grand_total ?? inv.total_amount ?? 0),
+        0
+      ),
+      overdueCount: filteredInvoices.filter((inv) => inv.status === "OVERDUE").length,
+      draftCount: filteredInvoices.filter((inv) => inv.status === "DRAFT").length,
+    }),
+    [filteredInvoices]
+  )
+
+  const filtersActive =
+    clientFilter !== "all" ||
+    statusFilter !== "all" ||
+    Boolean(invoiceFrom || invoiceTo || dueFrom || dueTo)
 
   const pageSize = 10
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize))
@@ -788,6 +810,13 @@ export function FinanceInvoices() {
         </div>
       </div>
 
+      {filtersActive && (
+        <p className="-mb-2 text-xs text-gray-500">
+          Totals below cover the {filteredInvoices.length} invoice
+          {filteredInvoices.length === 1 ? "" : "s"} matching the current filters.
+        </p>
+      )}
+
       <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         <div className="rounded-lg border bg-white p-4">
           <div className="flex items-center gap-3">
@@ -811,7 +840,11 @@ export function FinanceInvoices() {
             </div>
           </div>
         </div>
-        <div className="rounded-lg border bg-white p-4">
+        <Link
+          href="/finance/receivables"
+          className="rounded-lg border bg-white p-4 transition hover:border-orange-300 hover:shadow-sm"
+          title="Open client-wise receivables"
+        >
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-orange-100 p-3">
               <Clock className="h-6 w-6 text-orange-600" />
@@ -819,9 +852,10 @@ export function FinanceInvoices() {
             <div>
               <p className="text-sm text-gray-600">Outstanding</p>
               <p className="text-2xl font-bold">{compactMoney(summary.totalOutstanding)}</p>
+              <p className="text-xs text-orange-700">By client &amp; age →</p>
             </div>
           </div>
-        </div>
+        </Link>
         <div className="rounded-lg border bg-white p-4">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-red-100 p-3">
@@ -840,7 +874,7 @@ export function FinanceInvoices() {
             </div>
             <div>
               <p className="text-sm text-gray-600">Drafts</p>
-              <p className="text-2xl font-bold">{invoices.filter((invoice) => invoice.status === "DRAFT").length}</p>
+              <p className="text-2xl font-bold">{summary.draftCount}</p>
             </div>
           </div>
         </div>

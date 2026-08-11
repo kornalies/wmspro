@@ -5,6 +5,7 @@ import { getClient, query, setTenantContext } from "@/lib/db"
 import { fail, ok } from "@/lib/api-response"
 import { generateInvoiceDrafts, generateInvoiceDraftsByBillingCycle } from "@/lib/billing-service"
 import { syncInvoiceLedger } from "@/lib/finance-ledger"
+import { INVOICE_NOISE_FILTER_SQL, INVOICE_STATUS_SQL } from "@/lib/finance-receivables"
 import { getIdempotentResponse, saveIdempotentResponse } from "@/lib/idempotency"
 import { writeAudit } from "@/lib/audit"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
@@ -183,17 +184,7 @@ export async function GET(request: NextRequest) {
          COALESCE(ih.balance_amount, 0)::numeric AS balance,
          COALESCE(credit_notes.credit_note_total, 0)::numeric AS credit_note_total,
          COALESCE(credit_notes.reversal_credit_total, 0)::numeric AS reversal_credit_total,
-         CASE
-           WHEN COALESCE(credit_notes.reversal_credit_total, 0) >= COALESCE(ih.grand_total, 0)
-             AND COALESCE(ih.grand_total, 0) > 0 THEN 'REVERSED'
-           WHEN ih.status = 'PAID' THEN 'PAID'
-           WHEN ih.status = 'DRAFT' THEN 'DRAFT'
-           WHEN ih.status = 'VOID' THEN 'VOID'
-           WHEN COALESCE(ih.balance_amount, 0) <= 0 THEN 'PAID'
-           WHEN ih.due_date < CURRENT_DATE THEN 'OVERDUE'
-           WHEN ih.status = 'FINALIZED' THEN 'SENT'
-           ELSE ih.status
-         END AS status,
+         ${INVOICE_STATUS_SQL} AS status,
          co.company_name AS tenant_company_name,
          co.company_code AS tenant_company_code,
          ts.ui_branding,
@@ -257,25 +248,8 @@ export async function GET(request: NextRequest) {
            AND ip.invoice_id = ih.id
        ) payments ON true
        WHERE ih.company_id = $1
-         AND COALESCE(ih.invoice_number, '') NOT ILIKE 'INV-HARD-%'
-         AND COALESCE(c.client_name, '') NOT ILIKE '%smoke%'
-         AND COALESCE(c.client_code, '') NOT ILIKE '%smoke%'
-         AND COALESCE(ih.invoice_number, '') NOT ILIKE '%smoke%'
-         AND COALESCE(ih.draft_run_key, '') NOT ILIKE '%smoke%'
-         AND COALESCE(ih.draft_run_key, '') NOT ILIKE '%hardening%'
-         AND ($2::text IS NULL OR (
-           CASE
-             WHEN COALESCE(credit_notes.reversal_credit_total, 0) >= COALESCE(ih.grand_total, 0)
-               AND COALESCE(ih.grand_total, 0) > 0 THEN 'REVERSED'
-             WHEN ih.status = 'PAID' THEN 'PAID'
-             WHEN ih.status = 'DRAFT' THEN 'DRAFT'
-             WHEN ih.status = 'VOID' THEN 'VOID'
-             WHEN COALESCE(ih.balance_amount, 0) <= 0 THEN 'PAID'
-             WHEN ih.due_date < CURRENT_DATE THEN 'OVERDUE'
-             WHEN ih.status = 'FINALIZED' THEN 'SENT'
-             ELSE ih.status
-           END
-         ) = $2::text)
+         AND ${INVOICE_NOISE_FILTER_SQL}
+         AND ($2::text IS NULL OR (${INVOICE_STATUS_SQL}) = $2::text)
          AND ($3::text IS NULL OR ih.invoice_number ILIKE $3::text OR c.client_name ILIKE $3::text)
          AND (
            $4::int IS NULL
