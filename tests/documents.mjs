@@ -496,6 +496,7 @@ async function checkUiReachability() {
     "delivery-note", "consignment-note", "gate-pass", "cycle-count-sheet",
     "dispatch-manifest", "commercial-invoice", "job-card", "dispatch-note",
     "packing-slip", "stock-transfer-note", "inventory-adjustment-report",
+    "client-statement",
   ]
   const orphans = types.filter((t) => !haystack.includes(`"${t}"`) && !haystack.includes(`/documents/${t}/`))
   check(

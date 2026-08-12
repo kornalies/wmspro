@@ -11,7 +11,7 @@ import {
   requireScope,
 } from "@/lib/policy/guards"
 import { DocumentNotFoundError, buildDocument } from "@/lib/documents/builders"
-import { isDocumentType } from "@/lib/documents/types"
+import { DOCUMENT_ACCESS, isDocumentType } from "@/lib/documents/types"
 
 /**
  * Serves any document in the engine as a DocumentModel. Rendering lives in the
@@ -32,19 +32,32 @@ export async function GET(_: NextRequest, context: RouteContext) {
   try {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
-    requirePermission(session, "do.manage")
-    const policy = await getEffectivePolicy(
-      session.companyId,
-      session.userId,
-      resolvePolicyActorType(session)
-    )
-    requireFeature(policy, "do")
-    requirePolicyPermission(policy, "do.manage")
 
     const { type, id } = await context.params
     if (!isDocumentType(type)) {
       return fail("VALIDATION_ERROR", `Unknown document type '${type}'`, 400)
     }
+
+    // Per type, not per engine: the finance documents answer to finance
+    // permissions and the operating paperwork to do.manage. See DOCUMENT_ACCESS.
+    const access = DOCUMENT_ACCESS[type]
+    requirePermission(session, access.permission)
+    const policy = await getEffectivePolicy(
+      session.companyId,
+      session.userId,
+      resolvePolicyActorType(session)
+    )
+    requireFeature(policy, access.feature)
+    // Some tenants grant billing.view where others grant finance.view; the
+    // invoices route already treats them as equivalent, so a statement must not
+    // be stricter than the invoice list it is built from.
+    requirePolicyPermission(
+      policy,
+      access.permission === "finance.view" && policy.permissions.includes("billing.view")
+        ? "billing.view"
+        : access.permission
+    )
+
     const subjectId = Number(id)
     if (!Number.isInteger(subjectId) || subjectId <= 0) {
       return fail("VALIDATION_ERROR", "Invalid document id", 400)

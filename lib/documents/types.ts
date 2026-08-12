@@ -33,6 +33,7 @@ export type DocumentType =
   | "packing-slip"
   | "stock-transfer-note"
   | "inventory-adjustment-report"
+  | "client-statement"
 
 export const DOCUMENT_TYPES: DocumentType[] = [
   "pick-list",
@@ -50,11 +51,54 @@ export const DOCUMENT_TYPES: DocumentType[] = [
   "packing-slip",
   "stock-transfer-note",
   "inventory-adjustment-report",
+  "client-statement",
 ]
 
 export function isDocumentType(value: string): value is DocumentType {
   return (DOCUMENT_TYPES as string[]).includes(value)
 }
+
+/**
+ * What a caller must hold to read each document.
+ *
+ * The engine grew out of outbound paperwork, so its route gated every type on
+ * `do.manage` + the `do` feature. That is wrong for the two finance documents:
+ * a finance user could not print the invoice they had just issued, and could
+ * not print a statement at all. The gate is per type now — a finance user gets
+ * the finance documents and nothing else, and an operations user is unchanged.
+ *
+ * Keep this exhaustive: a new type must state who may read it rather than
+ * inherit a default, because the default would decide it silently.
+ */
+export const DOCUMENT_ACCESS: Record<DocumentType, { feature: string; permission: string }> = {
+  "commercial-invoice": { feature: "billing", permission: "finance.view" },
+  "client-statement": { feature: "billing", permission: "finance.view" },
+  "pick-list": { feature: "do", permission: "do.manage" },
+  "packing-list": { feature: "do", permission: "do.manage" },
+  "goods-issue-note": { feature: "do", permission: "do.manage" },
+  "goods-receipt-note": { feature: "do", permission: "do.manage" },
+  "delivery-note": { feature: "do", permission: "do.manage" },
+  "consignment-note": { feature: "do", permission: "do.manage" },
+  "gate-pass": { feature: "do", permission: "do.manage" },
+  "cycle-count-sheet": { feature: "do", permission: "do.manage" },
+  "dispatch-manifest": { feature: "do", permission: "do.manage" },
+  "job-card": { feature: "do", permission: "do.manage" },
+  "dispatch-note": { feature: "do", permission: "do.manage" },
+  "packing-slip": { feature: "do", permission: "do.manage" },
+  "stock-transfer-note": { feature: "do", permission: "do.manage" },
+  "inventory-adjustment-report": { feature: "do", permission: "do.manage" },
+}
+
+/**
+ * Types printed without a verification QR (FR-09).
+ *
+ * The QR answers "is this paper genuine and still current?" against the record
+ * behind it. A statement of account has no such record — it is a point-in-time
+ * list that is stale the moment a payment lands, and the public page could only
+ * confirm it by disclosing the client's identity to whoever scanned it. So it
+ * prints without one rather than with one that resolves to nothing.
+ */
+export const NON_VERIFIABLE_TYPES: DocumentType[] = ["client-statement"]
 
 /** Template revision, printed in the footer (FR-08) so a reader can tell two
  *  printings of the same document apart when the layout changes under them. */

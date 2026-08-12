@@ -43,6 +43,7 @@
     "test:lots": "node scripts/db/run-with-env.mjs tests/lots.mjs",
     "test:grn-lp-batch": "node scripts/db/run-with-env.mjs tests/grn-lp-batch.mjs",
     "test:stock-docs": "node scripts/db/run-with-env.mjs tests/stock-transfer-adjustment.mjs",
+    "test:receivables": "node scripts/db/run-with-env.mjs tests/receivables.mjs",
     "test:billing-cycle": "node tests/billing-cycle.mjs",
     "test:migration-targets": "node tests/migration-targets.mjs",
     "test:billing-cron": "node scripts/db/run-with-env.mjs tests/billing-cron.mjs",

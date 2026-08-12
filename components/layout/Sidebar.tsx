@@ -39,6 +39,7 @@ import {
     Ship,
     ChevronDown,
     ChevronRight,
+    Wallet,
 } from 'lucide-react'
 
 type SidebarRoute = {
@@ -222,6 +223,12 @@ const sections: SidebarSection[] = [
                 icon: Receipt,
                 href: '/finance/invoices',
                 color: 'text-lime-400',
+            },
+            {
+                label: 'Receivables',
+                icon: Wallet,
+                href: '/finance/receivables',
+                color: 'text-amber-400',
             },
             {
                 label: 'Billing',
