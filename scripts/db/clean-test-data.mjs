@@ -14,6 +14,13 @@
 //     * tests/allocation.mjs -> ITM-ALLOC-*, one per scenario, eight per run
 //     * tests/documents.mjs  -> ITM-DOCS-* and ITM-GRN-*
 //     * tests/lots.mjs       -> ITM-LOT-*
+//     * tests/chaos/_shared.mjs -> ITM-DEF (company A) and ITM-DEM (company B),
+//       the tenant-isolation marker items. Every DO-WH-DEF-* / GRN-WH-DEF-*
+//       document hangs off these.
+//
+//   DOCUMENTS -- test delivery orders with no test item to key off: either they
+//     carry no lines at all, or they were built over real master data. Matched
+//     by document number instead, and only when nothing is stocked against them.
 //
 // Every source is fixed at the root now (the suites tear their own fixtures down
 // via deleteTestFixtures in tests/chaos/_shared.mjs); this clears what they
@@ -34,7 +41,12 @@ const APPLY = process.argv.includes("--apply")
 const CUTOFF = "2090-01-01"
 // Prefixes each suite gives its throwaway items. Deliberately specific: a
 // pattern like 'ITM-%' would match real master data.
-const TEST_ITEM_PREFIXES = ["ITM-ALLOC-", "ITM-DOCS-", "ITM-GRN-", "ITM-LOT-", "ITM-TAIL-"]
+const TEST_ITEM_PREFIXES = ["ITM-ALLOC-", "ITM-DOCS-", "ITM-GRN-", "ITM-LOT-", "ITM-TAIL-", "ITM-DEF", "ITM-DEM"]
+// Test DOs that carry no test item to key off. Matched on document number, and
+// only removed when no stock is recorded against them -- see the guard below.
+// DO-GWU-CI-STAGED-001 is deliberately absent: the copy that leaked into the
+// DEFAULT company backs a 99.00 charge on a FINALIZED invoice, so it stays.
+const TEST_DO_PATTERNS = ["DO-DEF-CHAOS", "DO-DEM-CHAOS", "DO-LOT-%", "DO-ITEM3-%"]
 
 const client = new pg.Client({
   connectionString: process.env.MIGRATOR_DATABASE_URL || process.env.DATABASE_URL,
@@ -249,6 +261,26 @@ try {
       company.id,
       itemIds,
     ])
+    // Transfers, adjustments and putaway all reference the serial without
+    // cascading. A suite item can reach them (ITM-DEF is the chaos marker and
+    // gets used well beyond the outbound path), so unwind them before the
+    // serials they point at.
+    for (const table of ["stock_transfer_serials", "inventory_adjustment_serials"]) {
+      await client.query(
+        `DELETE FROM ${table}
+          WHERE company_id = $1
+            AND serial_id IN (
+              SELECT s.id FROM stock_serial_numbers s WHERE s.company_id = $1 AND s.item_id = ANY($2::int[]))`,
+        [company.id, itemIds]
+      )
+    }
+    await client.query(
+      `DELETE FROM stock_putaway_movements
+        WHERE company_id = $1
+          AND stock_serial_id IN (
+            SELECT s.id FROM stock_serial_numbers s WHERE s.company_id = $1 AND s.item_id = ANY($2::int[]))`,
+      [company.id, itemIds]
+    )
     await client.query(
       `DELETE FROM stock_serial_numbers WHERE company_id = $1 AND item_id = ANY($2::int[])`,
       [company.id, itemIds]
@@ -273,6 +305,44 @@ try {
         grnIds,
       ])
     }
+    // Inventory adjustments over a test item. Same rule as the documents above:
+    // the header goes only when every one of its lines is a test item, so an
+    // adjustment that also touched real stock keeps its document.
+    const adjRes = await client.query(
+      `SELECT DISTINCT al.adjustment_id AS id
+         FROM inventory_adjustment_lines al
+        WHERE al.company_id = $1 AND al.item_id = ANY($2::int[])
+          AND NOT EXISTS (
+            SELECT 1 FROM inventory_adjustment_lines o
+             WHERE o.adjustment_id = al.adjustment_id AND NOT (o.item_id = ANY($2::int[])))`,
+      [company.id, itemIds]
+    )
+    const adjIds = adjRes.rows.map((r) => r.id)
+    await client.query(
+      `DELETE FROM inventory_adjustment_lines WHERE company_id = $1 AND item_id = ANY($2::int[])`,
+      [company.id, itemIds]
+    )
+    if (adjIds.length) {
+      counts[`${company.company_code}:inventory_adjustments`] = adjIds.length
+      await client.query(`DELETE FROM inventory_adjustment_header WHERE company_id = $1 AND id = ANY($2::int[])`, [
+        company.id,
+        adjIds,
+      ])
+    }
+    // Remaining item-keyed references. Most cascade off a document that is
+    // already gone by now; these clear the stragglers left by a test item that
+    // reached a document real enough to keep.
+    for (const table of [
+      "stock_transfer_lines",
+      "asn_carton_details",
+      "asn_line_items",
+      "delivery_note_lines",
+      "do_pick_tasks",
+      "stock_batch_status",
+      "client_rate_details",
+    ]) {
+      await client.query(`DELETE FROM ${table} WHERE item_id = ANY($1::int[])`, [itemIds])
+    }
     // Storage snapshots reference the item, and the nightly job takes one for
     // whatever is in stock -- including a suite's throwaway item if it existed
     // when the job ran. They are counts of stock that no longer exists.
@@ -284,6 +354,59 @@ try {
       company.id,
       itemIds,
     ])
+  }
+
+  // -------------------------------------------------------------------------
+  // Test delivery orders matched by document number. These have no test item to
+  // key off -- most carry no lines at all, and one was built over real master
+  // data. The guard is stock, not naming: a DO with a serial or a movement
+  // against it moved real inventory, so it is left alone rather than deleted.
+  // -------------------------------------------------------------------------
+  for (const company of companies.rows) {
+    await client.query("SELECT set_config('app.company_id', $1, true)", [String(company.id)])
+
+    const dosRes = await client.query(
+      `SELECT h.id, h.do_number, h.status
+         FROM do_header h
+        WHERE h.company_id = $1
+          AND EXISTS (SELECT 1 FROM unnest($2::text[]) p WHERE h.do_number LIKE p)
+          AND NOT EXISTS (
+            SELECT 1 FROM stock_movements m WHERE m.company_id = $1 AND m.do_header_id = h.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM stock_serial_numbers s
+             WHERE s.company_id = $1
+               AND s.do_line_item_id IN (SELECT l.id FROM do_line_items l WHERE l.do_header_id = h.id))
+        ORDER BY h.id`,
+      [company.id, TEST_DO_PATTERNS]
+    )
+    const doIds = dosRes.rows.map((r) => r.id)
+    if (!doIds.length) continue
+
+    console.log(`\n${company.company_code} (company ${company.id}): ${doIds.length} test DO(s) by number`)
+    for (const row of dosRes.rows) console.log(`  ${row.do_number}  ${row.status}`)
+
+    counts[`${company.company_code}:do_header(by-number)`] = doIds.length
+    await report(
+      `${company.company_code}:do_line_items(by-number)`,
+      `SELECT COUNT(*)::int AS n FROM do_line_items WHERE company_id = $1 AND do_header_id = ANY($2::int[])`,
+      [company.id, doIds]
+    )
+
+    if (!APPLY) continue
+
+    // gate_out and billing_transactions point at the DO without cascading; the
+    // rest of the outbound tail (pack units, loads, picks, waves, goods issue,
+    // delivery note, lines) cascades off do_header.
+    await client.query(`DELETE FROM gate_out WHERE company_id = $1 AND do_header_id = ANY($2::int[])`, [
+      company.id,
+      doIds,
+    ])
+    await client.query(
+      `DELETE FROM billing_transactions
+        WHERE company_id = $1 AND source_type = 'DO' AND source_doc_id = ANY($2::int[])`,
+      [company.id, doIds]
+    )
+    await client.query(`DELETE FROM do_header WHERE company_id = $1 AND id = ANY($2::int[])`, [company.id, doIds])
   }
 
   console.log(`\n--- ${APPLY ? "DELETED" : "WOULD DELETE"} ---`)
