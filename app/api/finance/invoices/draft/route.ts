@@ -13,8 +13,18 @@ import {
   requirePolicyPermission,
 } from "@/lib/policy/guards"
 
+type InvoiceConflict = {
+  clientId: number
+  invoiceId: number
+  invoiceNumber: string
+  status: string
+  periodFrom: string
+  periodTo: string
+}
+
 type DraftSummary = {
   generatedCount: number
+  conflicts: InvoiceConflict[]
 }
 
 type CycleSummary = DraftSummary & {
@@ -31,16 +41,10 @@ function isCycleSummary(value: DraftSummary | CycleSummary): value is CycleSumma
   )
 }
 
-function getMonthRange(period?: string) {
-  if (period && /^\d{4}-\d{2}$/.test(period)) {
-    const [y, m] = period.split("-").map(Number)
-    const from = new Date(Date.UTC(y, m - 1, 1))
-    const to = new Date(Date.UTC(y, m, 0))
-    return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }
-  }
-  const now = new Date()
-  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
+function getMonthRange(period: string) {
+  const [y, m] = period.split("-").map(Number)
+  const from = new Date(Date.UTC(y, m - 1, 1))
+  const to = new Date(Date.UTC(y, m, 0))
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }
 }
 
@@ -72,10 +76,21 @@ export async function POST(request: NextRequest) {
       run_date?: string
     }
 
-    const month = getMonthRange(body.period)
-    const periodFrom = body.period_from || month.from
-    const periodTo = body.period_to || month.to
-    const autoCycle = body.auto_cycle === true
+    // An explicit window is honoured as given. With none supplied we must NOT fall back to the
+    // calendar month: a client on a WEEKLY profile then gets a month-long invoice whose period
+    // straddles the weekly invoices its own cycle produces. Deriving the window per client from
+    // client_billing_profile is what the cycle path already does, so default to it.
+    const monthPeriod = body.period && /^\d{4}-\d{2}$/.test(body.period) ? body.period : null
+    const month = monthPeriod ? getMonthRange(monthPeriod) : null
+    const explicitPeriod = !!monthPeriod || !!body.period_from || !!body.period_to
+    const periodFrom = body.period_from || month?.from || ""
+    const periodTo = body.period_to || month?.to || ""
+    const autoCycle = body.auto_cycle === true || !explicitPeriod
+    // A half-specified window used to be silently completed from the calendar month, which
+    // invented an end date the caller never asked to invoice through.
+    if (!autoCycle && (!periodFrom || !periodTo)) {
+      return fail("VALIDATION_ERROR", "period_from and period_to must both be supplied", 400)
+    }
     const runDate = body.run_date || new Date().toISOString().slice(0, 10)
     const runKey = body.run_key || (autoCycle ? `INV-CYCLE-${runDate}` : `INV-DRAFT-${periodFrom}-${periodTo}`)
     const idempotencyKey = request.headers.get("x-idempotency-key")?.trim()
@@ -134,7 +149,19 @@ export async function POST(request: NextRequest) {
        WHERE company_id = $2
          AND job_type = 'INVOICE_DRAFT'
          AND run_key = $3`,
-      [JSON.stringify(autoCycle ? summary : { generatedCount: summary.generatedCount }), session.companyId, runKey]
+      [
+        JSON.stringify(
+          autoCycle
+            ? summary
+            : {
+                generatedCount: summary.generatedCount,
+                conflictCount: summary.conflicts.length,
+                conflicts: summary.conflicts,
+              }
+        ),
+        session.companyId,
+        runKey,
+      ]
     )
 
     await writeAudit(
@@ -148,6 +175,7 @@ export async function POST(request: NextRequest) {
         after: {
           ...(autoCycle ? { runDate, mode: "CYCLE" } : { periodFrom, periodTo }),
           generatedCount: summary.generatedCount,
+          conflictCount: summary.conflicts.length,
         },
         req: request,
       },
@@ -157,10 +185,21 @@ export async function POST(request: NextRequest) {
     await db.query("COMMIT")
     const responseBody = {
       run_key: runKey,
-      period_from: periodFrom,
-      period_to: periodTo,
-      ...(autoCycle ? { run_date: runDate, mode: "CYCLE" } : {}),
+      // A cycle run has no single window — each client got its own — so reporting one would be a
+      // fiction, and reporting "" reads as a window that failed to resolve.
+      ...(autoCycle ? { run_date: runDate, mode: "CYCLE" } : { period_from: periodFrom, period_to: periodTo }),
       generated_count: summary.generatedCount,
+      // Clients skipped because the requested window overlaps an invoice they already have.
+      // Reported rather than thrown so one misconfigured client cannot abort the run for the rest.
+      conflict_count: summary.conflicts.length,
+      conflicts: summary.conflicts.map((c) => ({
+        client_id: c.clientId,
+        invoice_id: c.invoiceId,
+        invoice_number: c.invoiceNumber,
+        status: c.status,
+        period_from: c.periodFrom,
+        period_to: c.periodTo,
+      })),
       ...(autoCycle && isCycleSummary(summary)
         ? {
             due_client_count: summary.dueClientCount,

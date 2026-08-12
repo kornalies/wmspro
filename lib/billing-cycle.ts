@@ -122,6 +122,41 @@ function periodContaining(
 }
 
 /**
+ * How many days the cycle containing `dateIso` spans.
+ *
+ * Storage is staged one charge per daily snapshot, but a storage rate is configured
+ * against a cycle (`client_rate_master.billing_cycle` / `client_contracts.billing_cycle`),
+ * so the configured figure is per-unit-per-CYCLE and has to be divided down to a day
+ * before it is charged. Without this the same resting stock is billed a full cycle's
+ * storage on every snapshot — 31x over for a MONTHLY rate.
+ *
+ * Deliberately calendar-accurate rather than a flat 30/90/365: a per-day rate derived
+ * from an approximate denominator does not sum back to the configured cycle rate over
+ * the cycle, which is exactly the reconciliation finance performs.
+ */
+export function daysInCycle(cycle: BillingCycle, dateIso: string): number {
+  const date = parseIsoDateUtc(dateIso)
+  if (!date) return 1
+  const y = date.getUTCFullYear()
+  if (cycle === "WEEKLY") return 7
+  if (cycle === "QUARTERLY") {
+    const q = Math.floor(date.getUTCMonth() / 3)
+    const start = startOfQuarterUtc(y, q)
+    const end = endOfQuarterUtc(y, q)
+    return Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1
+  }
+  // 366 in a leap year, so a daily rate still sums back to the annual figure.
+  if (cycle === "YEARLY") {
+    return Date.UTC(y + 1, 0, 1) - Date.UTC(y, 0, 1) === 366 * 86_400_000 ? 366 : 365
+  }
+  // MONTHLY, and anything unrecognised. The fallback is deliberately the SHORTEST of the
+  // supported denominators bar weekly: an unknown cycle silently falling through to 365
+  // would divide a storage rate 12x too far and under-bill, which is the harder error to
+  // notice of the two.
+  return endOfMonthUtc(y, date.getUTCMonth()).getUTCDate()
+}
+
+/**
  * The earliest date on which a closed period may be invoiced.
  *
  * For MONTHLY this is `billing_day_of_month` of the month AFTER the period ends,

@@ -1,4 +1,4 @@
-import { type BillingCycle, billingDuePeriods } from "@/lib/billing-cycle"
+import { type BillingCycle, billingDuePeriods, daysInCycle } from "@/lib/billing-cycle"
 import { DEFAULT_GST_RATE, computeGstSplit, round2 } from "@/lib/money"
 
 type DBClient = {
@@ -30,6 +30,36 @@ function toNum(value: unknown, fallback = 0) {
 
 function monthLabel(dateIso: string) {
   return new Date(dateIso).toLocaleString("en-IN", { month: "short", year: "numeric" })
+}
+
+const BILLING_CYCLES: BillingCycle[] = ["WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"]
+
+function normalizeCycle(value: unknown): BillingCycle {
+  const cycle = String(value || "").toUpperCase() as BillingCycle
+  return BILLING_CYCLES.includes(cycle) ? cycle : "MONTHLY"
+}
+
+/**
+ * How many storage charges one configured rate has to be spread across.
+ *
+ * Storage rates are configured per unit per billing CYCLE (`client_rate_master.billing_cycle`,
+ * `client_contracts.billing_cycle`) but storage is staged one charge per DAILY snapshot, with
+ * period_from = period_to = the snapshot date. Charging the configured figure on each snapshot
+ * bills the same resting stock a full cycle's storage every day — 31x over for a MONTHLY rate,
+ * which is how one client picked up two identical 12,000 storage lines in a single week.
+ *
+ * Only STORAGE is divided: handling and VAS are priced per event, not per day of tenure.
+ * PERCENT is left alone because its base amount already carries a period of its own, so
+ * dividing again would prorate twice.
+ */
+function storageDailyDivisor(
+  chargeType: ChargeType,
+  calcMethod: CalcMethod,
+  cycle: unknown,
+  eventDate: string
+) {
+  if (chargeType !== "STORAGE" || calcMethod === "PERCENT") return 1
+  return Math.max(daysInCycle(normalizeCycle(cycle), eventDate), 1)
 }
 
 async function resolveSupplyType(
@@ -108,7 +138,7 @@ async function resolveRate(
   itemId?: number | null
 ) {
   const masterRes = await db.query(
-    `SELECT crm.id
+    `SELECT crm.id, crm.billing_cycle
      FROM client_rate_master crm
      WHERE crm.company_id = $1
        AND crm.client_id = $2
@@ -211,6 +241,11 @@ async function resolveRate(
         amount = billableQty * unitRate
       }
 
+      // Spread a per-cycle storage rate across the days of that cycle before the per-charge
+      // floor/ceiling apply, so min_charge/max_charge keep meaning "per staged charge".
+      const divisor = storageDailyDivisor(chargeType, calcMethod, masterRes.rows[0].billing_cycle, eventDate)
+      if (divisor > 1) amount = amount / divisor
+
       if (amount < minCharge) amount = minCharge
       if (maxCharge !== null && amount > maxCharge) amount = maxCharge
 
@@ -231,7 +266,8 @@ async function resolveRate(
   const fallbackContract = await db.query(
     `SELECT
        COALESCE(storage_rate_per_unit, 0)::numeric AS storage_rate,
-       COALESCE(handling_rate_per_unit, 0)::numeric AS handling_rate
+       COALESCE(handling_rate_per_unit, 0)::numeric AS handling_rate,
+       billing_cycle
      FROM client_contracts
      WHERE company_id = $1
        AND client_id = $2
@@ -244,12 +280,16 @@ async function resolveRate(
     return { isResolved: false, rateMasterId: null, rateDetailId: null, rate: 0, gstRate: 18 }
   }
   const row = fallbackContract.rows[0]
-  const rate =
+  const configuredRate =
     chargeType === "STORAGE"
       ? toNum(row.storage_rate)
       : chargeType === "INBOUND_HANDLING" || chargeType === "OUTBOUND_HANDLING"
         ? toNum(row.handling_rate)
         : 0
+  // Same per-cycle-to-per-day division as the rate-card path above: storage_rate_per_unit is
+  // quoted against the contract's billing_cycle, and storage is staged once per daily snapshot.
+  const divisor = storageDailyDivisor(chargeType, "PER_UNIT", row.billing_cycle, eventDate)
+  const rate = divisor > 1 ? Number((configuredRate / divisor).toFixed(4)) : configuredRate
   const amount = round2(Math.max(toNum(quantity), 0) * rate)
   return { isResolved: true, rateMasterId: null, rateDetailId: null, rate, amount, gstRate: DEFAULT_GST_RATE }
 }
@@ -507,6 +547,14 @@ export async function generateInvoiceDrafts(
     params
   )
   let generatedCount = 0
+  const conflicts: Array<{
+    clientId: number
+    invoiceId: number
+    invoiceNumber: string
+    status: string
+    periodFrom: string
+    periodTo: string
+  }> = []
 
   for (const row of clientsRes.rows) {
     const clientId = Number(row.client_id)
@@ -520,6 +568,11 @@ export async function generateInvoiceDrafts(
     const prefix = String(profile?.invoice_prefix || "INV")
     const creditDays = toNum(profile?.credit_days, 30)
 
+    // VOID is excluded deliberately (and uq_invoice_header_company_client_period is partial on
+    // the same condition, see migration 078). A voided invoice has already released its charges
+    // for re-invoicing; treating its shell as the period's occupant pushed the replacement into
+    // the supplementary branch below, which reissued it under a period narrowed to the surviving
+    // charges instead of the client's actual cycle.
     const existingRes = await db.query(
       `SELECT id, status, paid_amount
        FROM invoice_header
@@ -527,9 +580,49 @@ export async function generateInvoiceDrafts(
          AND client_id = $2
          AND period_from = $3::date
          AND period_to = $4::date
+         AND status <> 'VOID'
        LIMIT 1`,
       [args.companyId, clientId, args.periodFrom, args.periodTo]
     )
+
+    // Overlap guard. uq_invoice_header_company_client_period only makes the EXACT
+    // (period_from, period_to) tuple unique, so a request for a window that merely *contains*
+    // an existing invoice's window sails straight past it and raises a second invoice covering
+    // days the client has already been invoiced for. No charge is billed twice — the earlier
+    // invoice's transactions are already BILLED — but the client receives two invoices whose
+    // periods overlap, which is indistinguishable from double billing at the point it matters.
+    //
+    // The exact-period match is excluded here on purpose: that row is the legitimate target of
+    // this run (a DRAFT is regenerated in place, a finalized one raises a supplementary invoice
+    // narrowed inside its span, both handled below). VOID invoices no longer occupy their period.
+    if (!existingRes.rows.length) {
+      const overlapRes = await db.query(
+        `SELECT id, invoice_number, status, period_from::text AS period_from, period_to::text AS period_to
+         FROM invoice_header
+         WHERE company_id = $1
+           AND client_id = $2
+           AND status <> 'VOID'
+           AND period_from <= $4::date
+           AND period_to >= $3::date
+           AND NOT (period_from = $3::date AND period_to = $4::date)
+         ORDER BY period_from, id
+         LIMIT 1`,
+        [args.companyId, clientId, args.periodFrom, args.periodTo]
+      )
+      if (overlapRes.rows.length) {
+        const clash = overlapRes.rows[0]
+        conflicts.push({
+          clientId,
+          invoiceId: Number(clash.id),
+          invoiceNumber: String(clash.invoice_number),
+          status: String(clash.status),
+          periodFrom: String(clash.period_from).slice(0, 10),
+          periodTo: String(clash.period_to).slice(0, 10),
+        })
+        continue
+      }
+    }
+
     // Period the invoice HEADER is stored under. Normally the requested window; for a
     // supplementary invoice (see below) it is narrowed to the stranded charges' own span so it
     // does not collide with the finalized invoice on uq_invoice_header_company_client_period.
@@ -601,6 +694,7 @@ export async function generateInvoiceDrafts(
                AND client_id = $2
                AND period_from = $3::date
                AND period_to = $4::date
+               AND status <> 'VOID'
              LIMIT 1`,
             [args.companyId, clientId, headerPeriodFrom, headerPeriodTo]
           )
@@ -820,7 +914,7 @@ export async function generateInvoiceDrafts(
     generatedCount += 1
   }
 
-  return { generatedCount }
+  return { generatedCount, conflicts }
 }
 
 /**
@@ -912,6 +1006,7 @@ export async function generateInvoiceDraftsByBillingCycle(
   const skipped: Array<{ clientId: number; reason: string }> = []
   const truncatedClients: Array<{ clientId: number; billedThrough: string }> = []
   const windows: Array<{ clientId: number; cycle: string; periodFrom: string; periodTo: string; runKey: string; generated: number }> = []
+  const conflicts: Awaited<ReturnType<typeof generateInvoiceDrafts>>["conflicts"] = []
 
   for (const row of profileRes.rows) {
     const clientId = toNum(row.client_id)
@@ -946,6 +1041,7 @@ export async function generateInvoiceDraftsByBillingCycle(
         runKey,
       })
       generatedCount += toNum(summary.generatedCount, 0)
+      conflicts.push(...summary.conflicts)
       windows.push({
         clientId,
         cycle,
@@ -963,6 +1059,8 @@ export async function generateInvoiceDraftsByBillingCycle(
     profileCount: profileRes.rows.length,
     skippedCount: skipped.length,
     skipped,
+    conflicts,
+    conflictCount: conflicts.length,
     windows,
     truncatedClients,
     shard: args.shard ?? null,
