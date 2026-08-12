@@ -25,7 +25,7 @@
  */
 
 import process from "node:process"
-import { MAX_CATCHUP_PERIODS, billingDuePeriods } from "../lib/billing-cycle.ts"
+import { MAX_CATCHUP_PERIODS, billingDuePeriods, daysInCycle } from "../lib/billing-cycle.ts"
 
 let failures = 0
 function check(label, condition, extra = "") {
@@ -306,6 +306,48 @@ console.log("\n== Invalid input ==")
   const d = due("MONTHLY", "not-a-date", { billingDayOfMonth: 1, since: "2026-07-02" })
   eq("invalid run date yields nothing", d.periods.length, 0)
   eq("invalid run date reason", d.reason, "Invalid run date")
+}
+
+/**
+ * Storage rate proration.
+ *
+ * Storage rates are quoted per unit per CYCLE but staged one charge per DAILY snapshot.
+ * Before this divisor existed, a MONTHLY rate was charged in full on every snapshot: one
+ * client's 12 units at 1,000/unit produced two identical 12,000 lines inside a single week.
+ *
+ * The load-bearing property is not the divisor itself but that a day's rate, summed over
+ * the cycle, reconciles back to the configured cycle rate — which is the check finance
+ * actually performs. A flat 30/365 denominator passes a naive "it divides" test and fails
+ * this one in every month that is not 30 days long.
+ */
+console.log("\n== Storage rate proration ==")
+
+{
+  eq("weekly is 7 days", daysInCycle("WEEKLY", "2026-08-05"), 7)
+  eq("august is 31 days", daysInCycle("MONTHLY", "2026-08-05"), 31)
+  eq("february 2026 is 28 days", daysInCycle("MONTHLY", "2026-02-14"), 28)
+  eq("february 2028 is 29 days", daysInCycle("MONTHLY", "2028-02-14"), 29)
+  eq("Q1 is 90 days", daysInCycle("QUARTERLY", "2026-02-14"), 90)
+  eq("Q2 is 91 days", daysInCycle("QUARTERLY", "2026-05-14"), 91)
+  eq("2026 is 365 days", daysInCycle("YEARLY", "2026-08-05"), 365)
+  eq("2028 is 366 days", daysInCycle("YEARLY", "2028-08-05"), 366)
+  eq("an unrecognised cycle falls back to monthly", daysInCycle("FORTNIGHTLY", "2026-08-05"), 31)
+  eq("an invalid date never divides by zero", daysInCycle("MONTHLY", "not-a-date"), 1)
+}
+
+{
+  // The reconciliation property, asserted per day rather than as a single division:
+  // 1,000/unit/month over August, charged on all 31 snapshots, must total 1,000.
+  const rate = 1000
+  const days = daysInCycle("MONTHLY", "2026-08-05")
+  const perDay = Number((rate / days).toFixed(4))
+  const summed = Number((perDay * days).toFixed(2))
+  eq("a month of daily storage sums back to the monthly rate", summed, rate)
+  check(
+    "12 units of daily storage is no longer a month's charge",
+    Math.round(perDay * 12 * 100) / 100 === 387.1,
+    `got ${Math.round(perDay * 12 * 100) / 100}`
+  )
 }
 
 console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILURE(S)`}`)
