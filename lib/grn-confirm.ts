@@ -114,10 +114,27 @@ export async function confirmGrnInTransaction(
     //   - Mobile LP receipt: the line has no serials, so we synthesise one per unit ("<lp_code>-<n>").
     //   - Web desk confirm: the line already carries the REAL Mfg serials a clerk typed in.
     // Web GRNs with no gate_in (no LP stage) simply resolve to no LP rows and are unaffected.
-    let lpRows: Array<{ id: string; lp_code: string; quantity: number }> = []
+    let lpRows: Array<{
+      id: string
+      lp_code: string
+      quantity: number
+      batch_lot: string | null
+      expiry_date: string | null
+    }> = []
     if (Number(line.quantity || 0) > 0 && header.gate_in_id) {
       const lpRes = await db.query(
-        `SELECT lp.id, lp.lp_code, lp.quantity
+        // batch_lot/expiry_date come along because the pallet is the only place they
+        // were ever captured -- the scanner types them at LP create, grn_line_items has
+        // no column for them, and a serial that does not inherit them is invisible to
+        // Lot Master, recall, expiry and FEFO.
+        //
+        // expiry_date is timestamptz on the mobile table and date on the serial. It is
+        // narrowed to ::date::text here so the calendar day never passes through a JS
+        // Date: node-postgres hands a date back as local midnight, and re-serialising
+        // that as UTC silently moves the expiry a day earlier east of Greenwich.
+        `SELECT lp.id, lp.lp_code, lp.quantity,
+                NULLIF(TRIM(lp.batch_lot), '') AS batch_lot,
+                lp.expiry_date::date::text AS expiry_date
          FROM public.mobile_lp_records lp
          WHERE lp.gate_in_id = $1
            AND lp.client_id = $2
@@ -133,6 +150,9 @@ export async function confirmGrnInTransaction(
         id: String(lp.id),
         lp_code: String(lp.lp_code),
         quantity: Math.max(0, Number(lp.quantity || 0)),
+        batch_lot: lp.batch_lot === null || lp.batch_lot === undefined ? null : String(lp.batch_lot),
+        expiry_date:
+          lp.expiry_date === null || lp.expiry_date === undefined ? null : String(lp.expiry_date),
       }))
     }
 
@@ -159,11 +179,17 @@ export async function confirmGrnInTransaction(
     // desk-entered serials are assigned to pallets positionally (the best linkage available
     // without per-unit LP scanning at the desk). Serials beyond the LPs' combined quantity
     // (e.g. a pure web GRN) stay unlinked (null).
-    const lpIdBySerialIndex: Array<string | null> = new Array(serialNumbers.length).fill(null)
+    // The whole LP row travels rather than just its id: the serial inherits the
+    // pallet's batch and expiry as well as its identity, and those must come from the
+    // SAME pallet the walk assigned -- pulling them from anywhere else would attach one
+    // pallet's batch to another pallet's units, which is worse than no batch at all.
+    const lpBySerialIndex: Array<(typeof lpRows)[number] | null> = new Array(
+      serialNumbers.length
+    ).fill(null)
     let lpCursor = 0
     for (const lp of lpRows) {
-      for (let n = 0; n < lp.quantity && lpCursor < lpIdBySerialIndex.length; n++) {
-        lpIdBySerialIndex[lpCursor++] = lp.id
+      for (let n = 0; n < lp.quantity && lpCursor < lpBySerialIndex.length; n++) {
+        lpBySerialIndex[lpCursor++] = lp
       }
     }
 
@@ -192,11 +218,13 @@ export async function confirmGrnInTransaction(
     }
 
     for (let s = 0; s < serialNumbers.length; s++) {
+      const lp = lpBySerialIndex[s]
       await db.query(
         `INSERT INTO stock_serial_numbers (
           company_id, serial_number, item_id, client_id, warehouse_id,
-          status, received_date, grn_line_item_id, zone_layout_id, bin_location, lp_record_id
-        ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8, $9)
+          status, received_date, grn_line_item_id, zone_layout_id, bin_location, lp_record_id,
+          batch_number, expiry_date
+        ) VALUES ($1, $2, $3, $4, $5, 'IN_STOCK', CURRENT_DATE, $6, $7, $8, $9, $10, $11::date)
         ON CONFLICT (serial_number, item_id, client_id) DO NOTHING`,
         [
           companyId,
@@ -207,7 +235,9 @@ export async function confirmGrnInTransaction(
           Number(line.id),
           zoneLayoutId,
           binLocation,
-          lpIdBySerialIndex[s],
+          lp?.id ?? null,
+          lp?.batch_lot ?? null,
+          lp?.expiry_date ?? null,
         ]
       )
     }

@@ -41,6 +41,7 @@
     "test:allocation": "node scripts/db/run-with-env.mjs tests/allocation.mjs",
     "test:locations": "node scripts/db/run-with-env.mjs tests/location-generator.mjs",
     "test:lots": "node scripts/db/run-with-env.mjs tests/lots.mjs",
+    "test:grn-lp-batch": "node scripts/db/run-with-env.mjs tests/grn-lp-batch.mjs",
     "test:stock-docs": "node scripts/db/run-with-env.mjs tests/stock-transfer-adjustment.mjs",
     "test:billing-cycle": "node tests/billing-cycle.mjs",
     "test:migration-targets": "node tests/migration-targets.mjs",
