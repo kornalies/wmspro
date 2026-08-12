@@ -75,8 +75,18 @@ type TrailBalanceRow = {
   closing_credit: number
 }
 
+type InvoiceConflict = {
+  clientId: number
+  invoiceId: number
+  invoiceNumber: string
+  status: string
+  periodFrom: string
+  periodTo: string
+}
+
 type DraftSummary = {
   generatedCount: number
+  conflicts: InvoiceConflict[]
 }
 
 type CycleSummary = DraftSummary & {
@@ -93,10 +103,10 @@ function isCycleSummary(value: DraftSummary | CycleSummary): value is CycleSumma
   )
 }
 
-function currentMonthRange() {
-  const now = new Date()
-  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
+function monthRange(period: string) {
+  const [y, m] = period.split("-").map(Number)
+  const from = new Date(Date.UTC(y, m - 1, 1))
+  const to = new Date(Date.UTC(y, m, 0))
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }
 }
 
@@ -437,10 +447,17 @@ export async function POST(request: NextRequest) {
       auto_cycle?: boolean
       run_date?: string
     }
-    const month = currentMonthRange()
-    const periodFrom = body.period_from || month.from
-    const periodTo = body.period_to || month.to
-    const autoCycle = body.auto_cycle === true
+    // With no explicit window, derive one per client from client_billing_profile rather than
+    // assuming the calendar month — see the same guard in /finance/invoices/draft.
+    const monthPeriod = body.period && /^\d{4}-\d{2}$/.test(body.period) ? body.period : null
+    const month = monthPeriod ? monthRange(monthPeriod) : null
+    const explicitPeriod = !!monthPeriod || !!body.period_from || !!body.period_to
+    const periodFrom = body.period_from || month?.from || ""
+    const periodTo = body.period_to || month?.to || ""
+    const autoCycle = body.auto_cycle === true || !explicitPeriod
+    if (!autoCycle && (!periodFrom || !periodTo)) {
+      return fail("VALIDATION_ERROR", "period_from and period_to must both be supplied", 400)
+    }
     const runDate = body.run_date || new Date().toISOString().slice(0, 10)
     const runKey = body.run_key || (autoCycle ? `INV-CYCLE-${runDate}` : `INV-DRAFT-${periodFrom}-${periodTo}`)
     const idempotencyKey = request.headers.get("x-idempotency-key")?.trim()
@@ -487,6 +504,7 @@ export async function POST(request: NextRequest) {
         after: {
           ...(autoCycle ? { runDate, mode: "CYCLE" } : { periodFrom, periodTo }),
           generatedCount: result.generatedCount,
+          conflictCount: result.conflicts.length,
         },
         req: request,
       },
@@ -496,9 +514,17 @@ export async function POST(request: NextRequest) {
     await syncInvoiceLedger(session.companyId, session.userId)
     const responseBody = {
       generated_count: result.generatedCount,
-      period_from: periodFrom,
-      period_to: periodTo,
-      ...(autoCycle ? { run_date: runDate, mode: "CYCLE" } : {}),
+      conflict_count: result.conflicts.length,
+      conflicts: result.conflicts.map((c) => ({
+        client_id: c.clientId,
+        invoice_id: c.invoiceId,
+        invoice_number: c.invoiceNumber,
+        status: c.status,
+        period_from: c.periodFrom,
+        period_to: c.periodTo,
+      })),
+      // Omitted for a cycle run: each client got its own window, so there is no single one to report.
+      ...(autoCycle ? { run_date: runDate, mode: "CYCLE" } : { period_from: periodFrom, period_to: periodTo }),
       run_key: runKey,
       ...(autoCycle && isCycleSummary(result)
         ? {

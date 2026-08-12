@@ -304,9 +304,33 @@ export default function BillingPage() {
   })
 
   const generateMutation = useMutation({
-    mutationFn: async () => apiClient.post("/finance/invoices/draft", { period_from: applied.dateFrom, period_to: applied.dateTo }),
-    onSuccess: () => {
+    // Deliberately sends no period. The date inputs above are a BROWSE filter; using them as the
+    // invoice period made whatever range finance happened to be looking at into the billed window,
+    // which is how a WEEKLY client picked up a second, month-long invoice straddling its own
+    // weekly ones. With no period the API derives each client's window from its billing profile.
+    mutationFn: async () =>
+      apiClient.post<{
+        generated_count: number
+        conflict_count: number
+        conflicts: Array<{ client_id: number; invoice_number: string; period_from: string; period_to: string }>
+      }>("/finance/invoices/draft", {
+        run_date: applied.dateTo,
+        client_id: applied.clientFilter === "all" ? undefined : Number(applied.clientFilter),
+      }),
+    onSuccess: (res) => {
+      const conflicts = res.data?.conflicts ?? []
+      if (conflicts.length) {
+        toast.warning(
+          `${conflicts.length} client${conflicts.length > 1 ? "s" : ""} skipped — period already invoiced`,
+          {
+            description: conflicts
+              .map((c) => `${c.invoice_number} covers ${c.period_from} to ${c.period_to}`)
+              .join("\n"),
+          }
+        )
+      }
       billingQuery.refetch()
+      unbilledQuery.refetch()
     },
     onError: (error) => handleError(error, "Failed to generate invoice drafts"),
   })
