@@ -49,25 +49,47 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const search = String(searchParams.get("search") || "").trim()
     const date = String(searchParams.get("date") || "").trim()
+    const dateFrom = String(searchParams.get("date_from") || "").trim()
+    const dateTo = String(searchParams.get("date_to") || "").trim()
+    const clientId = Number(searchParams.get("client_id") || 0)
+    const requestedLimit = Number(searchParams.get("limit") || 0)
+    const limit = Math.min(Math.max(requestedLimit || 50, 1), 1000)
     const explicitWarehouseId = Number(searchParams.get("warehouse_id") || 0)
     const warehouseId = explicitWarehouseId || session.warehouseId || 0
     if (warehouseId) requireScope(policy, "warehouse", warehouseId)
+    if (clientId) requireScope(policy, "client", clientId)
 
-    const where: string[] = ["c.company_id = $1", "w.company_id = $1"]
+    const where: string[] = ["w.company_id = $1", "gi.company_id = $1"]
     const params: Array<string | number> = [session.companyId]
     let idx = 2
     if (warehouseId) {
       where.push(`gi.warehouse_id = $${idx++}`)
       params.push(warehouseId)
     }
+    if (clientId) {
+      where.push(`gi.client_id = $${idx++}`)
+      params.push(clientId)
+    }
     if (search) {
-      where.push(`(gi.gate_in_number ILIKE $${idx} OR gi.truck_number ILIKE $${idx} OR c.client_name ILIKE $${idx})`)
+      where.push(`(gi.gate_in_number ILIKE $${idx} OR gi.truck_number ILIKE $${idx} OR COALESCE(c.client_name, gi.pending_client_name) ILIKE $${idx})`)
       params.push(`%${search}%`)
       idx++
     }
     if (date) {
       where.push(`DATE(gi.gate_in_datetime) = $${idx}`)
       params.push(date)
+      idx++
+    }
+    // A range, so the reports screen's date filter reaches this feed instead of
+    // being dropped and silently showing every arrival ever recorded.
+    if (dateFrom) {
+      where.push(`DATE(gi.gate_in_datetime) >= $${idx}`)
+      params.push(dateFrom)
+      idx++
+    }
+    if (dateTo) {
+      where.push(`DATE(gi.gate_in_datetime) <= $${idx}`)
+      params.push(dateTo)
       idx++
     }
 
@@ -92,15 +114,21 @@ export async function GET(request: NextRequest) {
         gi.transported_by,
         gi.vendor_name,
         gi.transportation_remarks,
+        gi.status,
         NULL::integer as grn_header_id,
-        c.client_name,
+        COALESCE(c.client_name, gi.pending_client_name) AS client_name,
         w.warehouse_name
       FROM gate_in gi
-      JOIN clients c ON c.id = gi.client_id
+      -- LEFT JOIN: a vehicle can be gated in against a client that is not on the
+      -- master yet (client_id NULL, name captured in pending_client_name). An
+      -- inner join dropped those arrivals from this feed entirely, so open
+      -- vehicles sitting in the yard were invisible on the gate and reports
+      -- screens. Tenant scoping comes from gi.company_id, not from the join.
+      LEFT JOIN clients c ON c.id = gi.client_id AND c.company_id = gi.company_id
       JOIN warehouses w ON w.id = gi.warehouse_id
       WHERE ${where.join(" AND ")}
       ORDER BY gi.gate_in_datetime DESC
-      LIMIT 50`
+      LIMIT ${limit}`
       ,
       params
     )
