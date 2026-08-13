@@ -49,6 +49,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { exportStockToExcel } from "@/lib/export-utils"
+import { readUrlFilter } from "@/lib/url-filters"
 
 type StockItem = {
   id: number
@@ -157,17 +158,18 @@ const SERIAL_BATCH = 100
 export function StockSearch() {
   const PAGE_SIZE = 50
   const router = useRouter()
-  const [filters, setFilters] = useState<StockFilterState>({
-    serial: "",
-    lpId: "",
-    item: "",
-    clientSearch: "",
-    clientId: "all",
-    status: "all",
-    warehouseId: "all",
-    minAge: "",
-    maxAge: "",
-  })
+  // Openable from a report row: /stock/search?serial=..&item=..&client_id=..&min_age=..
+  const [filters, setFilters] = useState<StockFilterState>(() => ({
+    serial: readUrlFilter("serial"),
+    lpId: readUrlFilter("lp_id"),
+    item: readUrlFilter("item"),
+    clientSearch: readUrlFilter("client"),
+    clientId: readUrlFilter("client_id", "all"),
+    status: readUrlFilter("status", "all"),
+    warehouseId: readUrlFilter("warehouse_id", "all"),
+    minAge: readUrlFilter("min_age"),
+    maxAge: readUrlFilter("max_age"),
+  }))
   const [appliedFilters, setAppliedFilters] = useState(filters)
   const [selectedStock, setSelectedStock] = useState<StockItem | null>(null)
   const [currentPage, setCurrentPage] = useState(1)

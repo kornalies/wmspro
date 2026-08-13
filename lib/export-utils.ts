@@ -832,6 +832,92 @@ export const exportGateInToExcel = (gateInRows: Array<any>) => {
     XLSX.writeFile(wb, `Gate-In-Report-${new Date().toISOString().split('T')[0]}.xlsx`)
 }
 
+// ============================================================================
+// REPORTS WORKBENCH (generic, column-driven)
+// ============================================================================
+
+export type ReportExportMeta = {
+    title: string
+    dateFrom: string
+    dateTo: string
+    filterSummary?: string
+    /** Shown verbatim under the title, e.g. which filters the report honours. */
+    scopeNote?: string
+}
+
+const reportFilename = (meta: ReportExportMeta, extension: string) =>
+    `${meta.title.replace(/[^A-Za-z0-9]+/g, '-')}-${meta.dateFrom}-to-${meta.dateTo}.${extension}`
+
+const humanHeader = (column: string) =>
+    column.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+/**
+ * Export the active report to a real .xlsx workbook.
+ *
+ * The reports screen used to build a CSV, name it `.xls`, and call that an Excel
+ * export -- Excel opens it with a "the file format does not match" warning every
+ * time. Columns are passed in so the sheet matches what is on screen, including
+ * the user's hidden-column choices.
+ */
+export const exportReportToExcel = (
+    rows: Array<Record<string, unknown>>,
+    columns: string[],
+    meta: ReportExportMeta
+) => {
+    const data = rows.map((row) => {
+        const mapped: Record<string, unknown> = {}
+        for (const column of columns) mapped[humanHeader(column)] = row[column] ?? ''
+        return mapped
+    })
+
+    const ws = XLSX.utils.json_to_sheet(data.length ? data : [Object.fromEntries(columns.map((c) => [humanHeader(c), '']))])
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, meta.title.slice(0, 31))
+
+    const widths = columns.map((column) =>
+        Math.min(
+            48,
+            Math.max(humanHeader(column).length, ...rows.map((row) => String(row[column] ?? '').length), 10) + 2
+        )
+    )
+    ws['!cols'] = widths.map((width) => ({ width }))
+
+    XLSX.writeFile(wb, reportFilename(meta, 'xlsx'))
+}
+
+/**
+ * Export the active report to a real PDF.
+ *
+ * Previously this wrote the CSV text into a file named `.pdf`, which no PDF
+ * reader will open.
+ */
+export const exportReportToPDF = (
+    rows: Array<Record<string, unknown>>,
+    columns: string[],
+    meta: ReportExportMeta
+) => {
+    const doc = new jsPDF(columns.length > 6 ? 'landscape' : 'portrait')
+
+    doc.setFontSize(16)
+    doc.text(meta.title, 14, 16)
+    doc.setFontSize(9)
+    doc.text(`Period: ${meta.dateFrom} to ${meta.dateTo}`, 14, 23)
+    doc.text(`Generated: ${new Date().toLocaleString()}   |   Rows: ${rows.length}`, 14, 28)
+    if (meta.filterSummary) doc.text(`Filters: ${meta.filterSummary}`, 14, 33)
+    if (meta.scopeNote) doc.text(meta.scopeNote, 14, meta.filterSummary ? 38 : 33)
+
+    autoTable(doc, {
+        startY: meta.scopeNote || meta.filterSummary ? 44 : 34,
+        head: [columns.map(humanHeader)],
+        body: rows.map((row) => columns.map((column) => String(row[column] ?? '-'))),
+        theme: 'grid',
+        headStyles: { fillColor: [59, 130, 246] },
+        styles: { fontSize: 7, cellPadding: 1.5 },
+    })
+
+    doc.save(reportFilename(meta, 'pdf'))
+}
+
 /**
  * Export Users to Excel
  */

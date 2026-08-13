@@ -27,6 +27,7 @@ import { toast } from "sonner"
 import { useDO, useDOs, useDispatchDO, useReverseDO } from "@/hooks/use-do"
 import { useAdminResource } from "@/hooks/use-admin"
 import { downloadFile } from "@/lib/utils"
+import { hasUrlFilters, readUrlFilter } from "@/lib/url-filters"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -166,12 +167,17 @@ export default function DOPage() {
   const [limit, setLimit] = useState(25)
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
-  const [datePresetName, setDatePresetName] = useState("last_30")
-  const [dateFrom, setDateFrom] = useState(THIRTY_DAYS_AGO_ISO)
-  const [dateTo, setDateTo] = useState(TODAY_ISO)
-  const [statusFilter, setStatusFilter] = useState<DOStatus | "all">("all")
-  const [warehouseFilter, setWarehouseFilter] = useState("all")
-  const [clientFilter, setClientFilter] = useState("all")
+  // Openable from a report row: /do?date_from=..&date_to=..&client_id=..
+  const [datePresetName, setDatePresetName] = useState(() =>
+    hasUrlFilters("date_from", "date_to") ? "custom" : "last_30"
+  )
+  const [dateFrom, setDateFrom] = useState(() => readUrlFilter("date_from", THIRTY_DAYS_AGO_ISO))
+  const [dateTo, setDateTo] = useState(() => readUrlFilter("date_to", TODAY_ISO))
+  const [statusFilter, setStatusFilter] = useState<DOStatus | "all">(
+    () => readUrlFilter("status", "all") as DOStatus | "all"
+  )
+  const [warehouseFilter, setWarehouseFilter] = useState(() => readUrlFilter("warehouse_id", "all"))
+  const [clientFilter, setClientFilter] = useState(() => readUrlFilter("client_id", "all"))
   const [exceptionFilter, setExceptionFilter] = useState<ExceptionFilter>("all")
   const [sortKey, setSortKey] = useState<keyof DOListRow | "progress" | "exceptions">("created_at")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
