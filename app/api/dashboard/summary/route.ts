@@ -329,23 +329,31 @@ export async function GET(request: NextRequest) {
       time: toRelativeTime(row.created_at),
     }))
 
-    const invoicesTable = await query(`SELECT to_regclass('public.invoices') AS table_name`)
+    // Reads invoice_header, and reads it the way finance does: DRAFT and VOID are
+    // not billed money.
+    //
+    // This used to prefer a pre-normalization `invoices` table whenever that
+    // table still existed, which on a database carrying both put a fossil row on
+    // the executive dashboard as the billing position while the finance screens
+    // showed the real one. Migration 079 renames that table out of the way.
+    const normalizedTable = await query(`SELECT to_regclass('public.invoice_header') AS table_name`)
     let billingSnapshot: DashboardSummary["billing_snapshot"]
 
-    if (invoicesTable.rows[0]?.table_name) {
+    if (normalizedTable.rows[0]?.table_name) {
       const billingResult = await query(
         `SELECT
            COUNT(*)::int AS invoice_count,
-           COALESCE(SUM(COALESCE(i.total_amount, 0)), 0)::numeric AS total_billed,
-           COALESCE(SUM(COALESCE(i.paid_amount, 0)), 0)::numeric AS total_paid,
-           COALESCE(SUM(COALESCE(i.balance, COALESCE(i.total_amount, 0) - COALESCE(i.paid_amount, 0))), 0)::numeric AS total_pending,
+           COALESCE(SUM(COALESCE(ih.grand_total, 0)), 0)::numeric AS total_billed,
+           COALESCE(SUM(COALESCE(ih.paid_amount, 0)), 0)::numeric AS total_paid,
+           COALESCE(SUM(COALESCE(ih.balance_amount, 0)), 0)::numeric AS total_pending,
            COUNT(*) FILTER (
-             WHERE COALESCE(i.balance, COALESCE(i.total_amount, 0) - COALESCE(i.paid_amount, 0)) > 0
-               AND i.due_date::date < CURRENT_DATE
+             WHERE COALESCE(ih.balance_amount, 0) > 0
+               AND ih.due_date::date < CURRENT_DATE
            )::int AS overdue_invoices
-         FROM invoices i
-         WHERE i.company_id = $1
-           AND i.invoice_date::date BETWEEN $2::date AND $3::date`,
+         FROM invoice_header ih
+         WHERE ih.company_id = $1
+           AND ih.invoice_date::date BETWEEN $2::date AND $3::date
+           AND COALESCE(ih.status, '') <> ALL (ARRAY['DRAFT', 'VOID'])`,
         [companyId, from, to]
       )
       const row = billingResult.rows[0] ?? {}

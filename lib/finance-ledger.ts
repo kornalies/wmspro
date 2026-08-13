@@ -107,30 +107,11 @@ async function fetchInvoiceSourceRows(
     return result.rows as InvoiceSourceRow[]
   }
 
-  const invoicesTable = await db.query(`SELECT to_regclass('public.invoices') AS table_name`)
-  const hasInvoicesTable = Boolean(invoicesTable.rows[0]?.table_name)
-
-  if (hasInvoicesTable) {
-    const params: Array<number> = [companyId]
-    const idFilter = invoiceId ? `AND i.id = $${params.push(invoiceId)}` : ""
-    const result = await db.query(
-      `SELECT
-         CAST(i.id AS text) AS source_id,
-         i.invoice_date::date::text AS txn_date,
-         i.client_id,
-         c.client_name,
-         COALESCE(i.total_amount, 0)::numeric AS taxable_amount,
-         ROUND(COALESCE(i.total_amount, 0) * 0.18, 2)::numeric AS tax_amount,
-         ROUND(COALESCE(i.total_amount, 0) * 1.18, 2)::numeric AS invoice_total,
-         COALESCE(i.paid_amount, 0)::numeric AS paid_amount
-       FROM invoices i
-       JOIN clients c ON c.id = i.client_id
-       WHERE i.company_id = $1
-         ${idFilter}`,
-      params
-    )
-    return result.rows as InvoiceSourceRow[]
-  }
+  // The fallback that used to sit here read the pre-normalization `invoices`
+  // table and derived tax by assuming a flat 18% on the total. It was
+  // unreachable -- invoice_header has existed since migration 015 -- and posting
+  // ledger entries from an assumed tax rate is not a fallback worth keeping.
+  // Migration 079 renames that table out of the way.
   return []
 }
 
