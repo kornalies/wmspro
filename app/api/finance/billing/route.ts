@@ -59,7 +59,6 @@ export async function GET(request: NextRequest) {
     const warehouseId = searchParams.get("warehouse_id")
 
     const normalizedTable = await query(`SELECT to_regclass('public.invoice_header') AS table_name`)
-    const invoicesTable = await query(`SELECT to_regclass('public.invoices') AS table_name`)
     let rows: InvoiceRow[] = []
 
     if (normalizedTable.rows[0]?.table_name) {
@@ -116,59 +115,11 @@ export async function GET(request: NextRequest) {
         params
       )
       rows = result.rows as InvoiceRow[]
-    } else if (invoicesTable.rows[0]?.table_name) {
-      const conditions: string[] = ["i.company_id = $1"]
-      const params: Array<string | number> = [session.companyId]
-      let idx = 2
-
-      if (dateFrom) {
-        conditions.push(`i.invoice_date >= $${idx++}::date`)
-        params.push(dateFrom)
-      }
-      if (dateTo) {
-        conditions.push(`i.invoice_date <= $${idx++}::date`)
-        params.push(dateTo)
-      }
-      if (clientId && clientId !== "all") {
-        conditions.push(`i.client_id = $${idx++}`)
-        params.push(Number(clientId))
-      }
-      if (warehouseId && warehouseId !== "all") {
-        conditions.push(`EXISTS (
-          SELECT 1
-          FROM billing_transactions bt
-          WHERE bt.company_id = i.company_id
-            AND bt.invoice_id = i.id
-            AND bt.warehouse_id = $${idx++}
-        )`)
-        params.push(Number(warehouseId))
-      }
-
-      const result = await query(
-        `SELECT
-          i.id,
-          i.invoice_number,
-          i.client_id,
-          c.client_name,
-          COALESCE(i.billing_period, TO_CHAR(i.invoice_date, 'Mon YYYY')) AS billing_period,
-          i.invoice_date::date AS invoice_date,
-          i.due_date::date AS due_date,
-          COALESCE(i.total_amount, 0)::numeric AS total_amount,
-          COALESCE(i.paid_amount, 0)::numeric AS paid_amount,
-          COALESCE(i.balance, COALESCE(i.total_amount, 0) - COALESCE(i.paid_amount, 0))::numeric AS balance,
-          CASE
-            WHEN COALESCE(i.balance, COALESCE(i.total_amount, 0) - COALESCE(i.paid_amount, 0)) <= 0 THEN 'PAID'
-            WHEN i.due_date::date < CURRENT_DATE THEN 'OVERDUE'
-            ELSE 'PENDING'
-          END AS status
-        FROM invoices i
-        JOIN clients c ON c.id = i.client_id AND c.company_id = i.company_id
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY i.invoice_date DESC`,
-        params
-      )
-      rows = result.rows as InvoiceRow[]
     }
+    // There used to be a second branch here reading the pre-normalization
+    // `invoices` table when invoice_header was absent. invoice_header has been
+    // the billing table since migration 015 and that branch was unreachable;
+    // migration 079 renames the legacy table out of the way.
 
     const totalRevenue = rows.reduce((sum, row) => sum + Number(row.total_amount), 0)
     const totalPaid = rows.reduce((sum, row) => sum + Number(row.paid_amount), 0)
