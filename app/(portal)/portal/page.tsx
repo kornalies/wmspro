@@ -2,18 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
 import { useLogout } from "@/hooks/use-auth"
+import { PORTAL_LOGIN_PATH } from "@/lib/sign-in-path"
 
 type PortalClient = {
   id: number
@@ -169,18 +159,6 @@ export default function ClientPortalPage() {
   const slaPct = Number(summary?.sla?.on_time_pct ?? 100)
   const fulfillmentPct = totalOrders > 0 ? Math.round((fulfilledOrders / totalOrders) * 100) : 100
 
-  const inventoryTrend: Array<{ week: string; inStock: number; dispatched: number }> = []
-  const orderFlowTrend: Array<{ week: string; received: number; fulfilled: number; pending: number }> = []
-  const warehouseCards: Array<{
-    name: string
-    location: string
-    zones: number
-    skus: number
-    value: number
-    utilization: number
-    status: string
-  }> = []
-
   const alerts = useMemo(
     () => [
       {
@@ -269,7 +247,7 @@ export default function ClientPortalPage() {
     try {
       await logoutMutation.mutateAsync()
     } finally {
-      router.push("/login")
+      router.push(PORTAL_LOGIN_PATH)
       router.refresh()
     }
   }
@@ -336,49 +314,56 @@ export default function ClientPortalPage() {
           </select>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {canDisputes ? (
-            <a href="/portal/disputes" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              Disputes
-            </a>
-          ) : null}
-          {canSla ? (
-            <a href="/portal/sla" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              SLA Report
-            </a>
-          ) : null}
-          {canReports ? (
-            <a href="/portal/reports" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              Reports
-            </a>
-          ) : null}
-          <button
-            type="button"
-            onClick={downloadSnapshot}
-            className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50"
-          >
-            Download
-          </button>
-          {canAsn ? (
-            <a href="/portal/asn" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              + Request ASN
-            </a>
-          ) : null}
-          {canInventory ? (
-            <a href="/portal/inventory" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              Inventory
-            </a>
-          ) : null}
-          {canOrders ? (
-            <a href="/portal/orders" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              {doLabel} Orders
-            </a>
-          ) : null}
-          {canBilling ? (
-            <a href="/portal/billing" className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-              Billing
-            </a>
-          ) : null}
+        {/*
+          Navigation and actions were one undifferentiated row of eight
+          identical pills, in an order nothing explained -- Disputes, SLA,
+          Reports, Download, ASN, Inventory, Orders, Billing -- with "Download"
+          (which produces a file) and "+ Request ASN" (which creates a record)
+          sitting among six links that merely change page. Split by what the
+          control does, and the links reordered to follow the goods: what you
+          hold, what is moving, what it costs, then the exception screens.
+        */}
+        <div className="flex flex-col gap-3 border-t border-neutral-200 pt-4 lg:flex-row lg:items-center lg:justify-between">
+          <nav aria-label="Portal sections" className="flex flex-wrap items-center gap-1">
+            {[
+              canInventory ? ["/portal/inventory", "Inventory"] : null,
+              canOrders ? ["/portal/orders", `${doLabel} Orders`] : null,
+              canBilling ? ["/portal/billing", "Billing"] : null,
+              canDisputes ? ["/portal/disputes", "Disputes"] : null,
+              canSla ? ["/portal/sla", "SLA"] : null,
+              canReports ? ["/portal/reports", "Reports"] : null,
+            ]
+              .filter((entry): entry is [string, string] => entry !== null)
+              .map(([href, label]) => (
+                <a
+                  key={href}
+                  href={href}
+                  className="rounded-lg px-3 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+                >
+                  {label}
+                </a>
+              ))}
+          </nav>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={downloadSnapshot}
+              className="rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50"
+            >
+              Download snapshot
+            </button>
+            {canAsn ? (
+              // The one thing a client comes here to create rather than read,
+              // so it is the only filled control on the page.
+              <a
+                href="/portal/asn"
+                className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
+              >
+                Request ASN
+              </a>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -455,77 +440,18 @@ export default function ClientPortalPage() {
             </section>
           )}
 
-          <section className="grid gap-4 xl:grid-cols-2">
-            <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
-              <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Inventory Trend - Last 6 Weeks</p>
-              <div className="h-72">
-                {inventoryTrend.length ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={inventoryTrend}>
-                      <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
-                      <XAxis dataKey="week" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Area type="monotone" dataKey="inStock" stroke="#2563eb" fill="#bfdbfe" fillOpacity={0.5} name="In stock" />
-                      <Area type="monotone" dataKey="dispatched" stroke="#059669" fill="#a7f3d0" fillOpacity={0.5} name="Dispatched" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-200 text-sm text-neutral-500">
-                    No historical inventory trend data available.
-                  </div>
-                )}
-              </div>
-            </article>
+          {/*
+            An "Inventory Trend - Last 6 Weeks" area chart, an "Order Flow"
+            bar chart, and a warehouse distribution grid used to sit here. All
+            three were driven by array literals that nothing ever wrote to, so
+            every client saw three empty frames and two screens of scrolling to
+            reach the alerts below. Removed rather than left dark: an empty panel
+            promising six weeks of history reads as broken data, not as an
+            absent feature.
 
-            <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
-              <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Order Flow - Last 6 Weeks</p>
-              <div className="h-72">
-                {orderFlowTrend.length ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={orderFlowTrend}>
-                      <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
-                      <XAxis dataKey="week" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="received" fill="#2563eb" radius={[4, 4, 0, 0]} name="Received" />
-                      <Bar dataKey="fulfilled" fill="#65a30d" radius={[4, 4, 0, 0]} name="Fulfilled" />
-                      <Bar dataKey="pending" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Pending" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-200 text-sm text-neutral-500">
-                    No historical order flow data available.
-                  </div>
-                )}
-              </div>
-            </article>
-          </section>
-
-          <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">
-            <p className="mb-3 text-sm uppercase tracking-wide text-neutral-600">Warehouse View - Location Distribution</p>
-            <div className="grid gap-3 lg:grid-cols-3">
-              {warehouseCards.length ? warehouseCards.map((warehouse) => (
-                <article key={warehouse.name} className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                  <p className="text-2xl font-medium">{warehouse.name}</p>
-                  <p className="text-sm text-neutral-600">{warehouse.location}</p>
-                  <div className="mt-3 h-2 rounded-full bg-neutral-200">
-                    <div className="h-2 rounded-full bg-blue-600" style={{ width: `${warehouse.utilization}%` }} />
-                  </div>
-                  <p className="mt-2 text-sm text-neutral-700">
-                    {warehouse.zones} zones - {warehouse.skus} active SKUs - {formatCurrencyINR(warehouse.value)}
-                  </p>
-                  <span className="mt-2 inline-block rounded-full bg-emerald-100 px-3 py-0.5 text-xs font-medium text-emerald-700">
-                    {warehouse.status}
-                  </span>
-                </article>
-              )) : (
-                <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 p-6 text-sm text-neutral-500 lg:col-span-3">
-                  No warehouse distribution data available for this portal account.
-                </div>
-              )}
-            </div>
-          </section>
+            If trends come back, they need weekly aggregates from
+            /api/portal/reports -- not client-side state.
+          */}
 
           <section className="grid gap-4 xl:grid-cols-2">
             <article className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:p-5">

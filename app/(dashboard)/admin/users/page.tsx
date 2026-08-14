@@ -57,6 +57,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { PORTAL_FEATURE_KEYS, PORTAL_FEATURE_LABELS } from "@/lib/portal-features"
 
 type UserRow = {
   id: number
@@ -99,19 +100,7 @@ type SortKey = "full_name" | "username" | "email" | "role" | "warehouse_name" | 
 
 const USERS_PER_PAGE = 12
 
-const portalFeatures = [
-  { key: "portal.inventory.view", label: "Inventory" },
-  { key: "portal.orders.view", label: "Orders" },
-  { key: "portal.billing.view", label: "Billing" },
-  { key: "portal.reports.view", label: "Reports" },
-  { key: "portal.sla.view", label: "SLA View" },
-  { key: "portal.sla.manage", label: "SLA Manage" },
-  { key: "portal.dispute.view", label: "Dispute View" },
-  { key: "portal.dispute.create", label: "Dispute Create" },
-  { key: "portal.dispute.manage", label: "Dispute Manage" },
-  { key: "portal.asn.view", label: "ASN View" },
-  { key: "portal.asn.create", label: "ASN Create" },
-]
+const portalFeatures = PORTAL_FEATURE_KEYS.map((key) => ({ key, label: PORTAL_FEATURE_LABELS[key] }))
 
 const roleColors: Record<string, string> = {
   SUPER_ADMIN: "bg-black text-white",

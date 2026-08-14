@@ -4,7 +4,6 @@ import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
 import { getIdempotentResponse, saveIdempotentResponse } from "@/lib/idempotency"
-import { ensurePortalTables } from "@/lib/portal"
 
 import { hasPortalFeaturePermission, parseAndAuthorizeClientId } from "@/app/api/portal/_utils"
 
@@ -21,7 +20,6 @@ export async function GET(request: Request) {
     if (!(await hasPortalFeaturePermission(session, "portal.asn.view"))) {
       return fail("FORBIDDEN", "No portal ASN view permission", 403)
     }
-    await ensurePortalTables()
 
     const clientIdCheck = await parseAndAuthorizeClientId(
       session,
@@ -34,10 +32,11 @@ export async function GET(request: Request) {
     const result = await query(
       `SELECT id, request_number, expected_date, remarks, status, created_at
        FROM client_portal_asn_requests
-       WHERE client_id = $1
+       WHERE company_id = $1
+         AND client_id = $2
        ORDER BY created_at DESC
        LIMIT 100`,
-      [clientIdCheck.clientId]
+      [session.companyId, clientIdCheck.clientId]
     )
 
     return ok(result.rows)
@@ -54,7 +53,6 @@ export async function POST(request: Request) {
     if (!(await hasPortalFeaturePermission(session, "portal.asn.create"))) {
       return fail("FORBIDDEN", "No portal ASN create permission", 403)
     }
-    await ensurePortalTables()
 
     const idemKey = request.headers.get("x-idempotency-key")
     if (idemKey) {
@@ -77,7 +75,9 @@ export async function POST(request: Request) {
     const seq = await query(
       `SELECT COALESCE(MAX(CAST(SUBSTRING(request_number FROM '([0-9]+)$') AS INTEGER)), 0) + 1 AS next_seq
        FROM client_portal_asn_requests
-       WHERE request_number LIKE 'ASNREQ-%'`
+       WHERE company_id = $1
+         AND request_number LIKE 'ASNREQ-%'`,
+      [session.companyId]
     )
     const requestNumber = `ASNREQ-${String(seq.rows[0]?.next_seq || 1).padStart(6, "0")}`
 

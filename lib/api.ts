@@ -1,5 +1,7 @@
 import axios from "axios"
 
+import { signInPathForCurrentLocation } from "@/lib/sign-in-path"
+
 const api = axios.create({
   baseURL: "/api",
   headers: {
@@ -17,7 +19,7 @@ api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401 && typeof window !== "undefined") {
-      window.location.href = "/login"
+      window.location.href = signInPathForCurrentLocation()
     }
 
     const responseData = error.response?.data

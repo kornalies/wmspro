@@ -4,7 +4,7 @@ import { z } from "zod"
 
 import { fail, ok } from "@/lib/api-response"
 import { getClient, setTenantContext } from "@/lib/db"
-import { ensurePortalTables } from "@/lib/portal"
+import { setInviteTokenContext } from "@/lib/portal"
 
 const activateSchema = z.object({
   token: z.string().min(12),
@@ -14,10 +14,13 @@ const activateSchema = z.object({
 export async function POST(request: NextRequest) {
   const db = await getClient()
   try {
-    await ensurePortalTables()
     const payload = activateSchema.parse(await request.json())
 
     await db.query("BEGIN")
+    // The invitee has no session, so the token is the only thing that makes this
+    // row visible under RLS. Set before the lookup; the tenant context set below
+    // is what authorises the writes that follow.
+    await setInviteTokenContext(db, payload.token)
     const inviteResult = await db.query(
       `SELECT id, company_id, user_id, status, expires_at
        FROM portal_user_invites

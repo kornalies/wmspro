@@ -7,7 +7,6 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { writeAudit } from "@/lib/audit"
 import { fail, ok } from "@/lib/api-response"
 import { getClient, query, setTenantContext } from "@/lib/db"
-import { ensurePortalTables } from "@/lib/portal"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireFeature, requirePolicyPermission } from "@/lib/policy/guards"
 
@@ -38,7 +37,6 @@ export async function GET(request: NextRequest) {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
     await requirePortalInvitePolicy(session)
-    await ensurePortalTables()
 
     const userId = Number(request.nextUrl.searchParams.get("user_id") || 0)
     if (!userId) return fail("VALIDATION_ERROR", "user_id is required", 400)
@@ -73,7 +71,6 @@ export async function POST(request: NextRequest) {
     const session = await getSession()
     if (!session) return fail("UNAUTHORIZED", "Unauthorized", 401)
     await requirePortalInvitePolicy(session)
-    await ensurePortalTables()
 
     const payload = createInviteSchema.parse(await request.json())
 
