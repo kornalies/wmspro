@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { PORTAL_LOGIN_PATH } from "@/lib/sign-in-path"
 
 type ValidationPayload = {
   valid: boolean
@@ -135,8 +136,8 @@ function PortalActivateContent() {
           ) : null}
 
           {done ? (
-            <a href="/login" className="inline-block text-sm font-medium text-blue-700 hover:underline">
-              Go to Login
+            <a href={PORTAL_LOGIN_PATH} className="inline-block text-sm font-medium text-blue-700 hover:underline">
+              Go to Portal Login
             </a>
           ) : null}
         </CardContent>

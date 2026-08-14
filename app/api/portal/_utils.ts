@@ -1,6 +1,6 @@
 import { TokenPayload } from "@/lib/auth"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
-import { canAccessClient, hasExplicitPortalPermissions, resolvePortalFeaturePermissions } from "@/lib/portal"
+import { canAccessClient, resolvePortalFeaturePermissions } from "@/lib/portal"
 import { getUserAccessProfile } from "@/lib/rbac"
 
 export async function parseAndAuthorizeClientId(
@@ -31,13 +31,19 @@ export async function hasPortalPermission(session: TokenPayload, permission: str
   return permissions.includes(permission)
 }
 
+/**
+ * A portal feature is allowed only if it was granted.
+ *
+ * This used to fall open: a user with no rows in portal_user_permissions was
+ * treated as unrestricted, so provisioning a portal user and forgetting the
+ * feature grants handed them everything — billing, disputes, SLA — rather than
+ * nothing. Migration 080 backfills the full key set for every portal user who
+ * relied on that default, so flipping it here changes no existing user's access,
+ * only what a newly created one starts with.
+ */
 export async function hasPortalFeaturePermission(session: TokenPayload, featureKey: string) {
   await assertProductEnabled(session.companyId, "WMS")
   if (session.role === "SUPER_ADMIN" || session.role === "ADMIN") return true
-  const hasExplicit = await hasExplicitPortalPermissions(session)
-  if (!hasExplicit) {
-    return true
-  }
   const allowed = await resolvePortalFeaturePermissions(session)
   return allowed.includes(featureKey)
 }

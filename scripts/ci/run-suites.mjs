@@ -17,6 +17,7 @@ const SUITES = [
   "test:billing-cycle",
   "test:migration-targets",
   "test:billing-cron",
+  "test:portal",
   "test:locations",
   "test:allocation",
   "test:lots",

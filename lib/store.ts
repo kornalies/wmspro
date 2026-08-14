@@ -1,6 +1,8 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
+import { signInPathForCurrentLocation } from "@/lib/sign-in-path"
+
 interface User {
   id: number
   username: string
@@ -28,7 +30,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         set({ user: null })
         if (typeof window !== "undefined") {
-          window.location.href = "/login"
+          window.location.href = signInPathForCurrentLocation()
         }
       },
     }),

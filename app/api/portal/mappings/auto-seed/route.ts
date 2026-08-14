@@ -1,7 +1,6 @@
 import { getSession } from "@/lib/auth"
 import { fail, ok } from "@/lib/api-response"
 import { query } from "@/lib/db"
-import { ensurePortalTables } from "@/lib/portal"
 
 function canManagePortalMappings(session: Awaited<ReturnType<typeof getSession>>) {
   if (!session) return false
@@ -19,8 +18,11 @@ export async function POST() {
       return fail("FORBIDDEN", "Insufficient permissions", 403)
     }
 
-    await ensurePortalTables()
-
+    // Every statement below is scoped to the caller's company. It used to seed
+    // across the whole users table, which was already the wrong shape for an
+    // admin action and is now an outright error: portal_user_clients enforces
+    // tenant isolation, so a row for another company fails the policy's WITH
+    // CHECK and aborts the whole seed rather than being skipped.
     const adminSeed = await query(
       `INSERT INTO portal_user_clients (company_id, user_id, client_id, is_active)
        SELECT u.company_id, u.id, c.id, true
@@ -36,10 +38,12 @@ export async function POST() {
        ) primary_role ON true
        JOIN clients c ON c.company_id = u.company_id AND c.is_active = true
        WHERE u.is_active = true
+         AND u.company_id = $1
          AND UPPER(COALESCE(primary_role.role_code, u.role)) IN ('SUPER_ADMIN', 'ADMIN')
        ON CONFLICT (company_id, user_id, client_id)
        DO UPDATE SET is_active = EXCLUDED.is_active
-       RETURNING id`
+       RETURNING id`,
+      [session.companyId]
     )
 
     const clientSeed = await query(
@@ -63,6 +67,7 @@ export async function POST() {
           OR UPPER(c.client_code) = UPPER(split_part(COALESCE(u.email, ''), '@', 1))
         )
        WHERE u.is_active = true
+         AND u.company_id = $1
          AND UPPER(COALESCE(primary_role.role_code, u.role)) IN (
            'CLIENT',
            'VIEWER',
@@ -73,13 +78,16 @@ export async function POST() {
          )
        ON CONFLICT (company_id, user_id, client_id)
        DO UPDATE SET is_active = EXCLUDED.is_active
-       RETURNING id`
+       RETURNING id`,
+      [session.companyId]
     )
 
     const total = await query(
       `SELECT COUNT(*)::int AS count
        FROM portal_user_clients
-       WHERE is_active = true`
+       WHERE company_id = $1
+         AND is_active = true`,
+      [session.companyId]
     )
 
     return ok({

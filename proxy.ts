@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { verifyTokenWithoutSession, type TokenPayload } from "@/lib/auth"
 import { securityTelemetry } from "@/lib/security-telemetry"
+import { PORTAL_LOGIN_PATH, isPublicPortalPath, signInPathFor } from "@/lib/sign-in-path"
 
 function getRequestId(request: NextRequest): string {
   const direct = request.headers.get("x-request-id")
@@ -103,18 +104,39 @@ export default async function proxy(request: NextRequest) {
   const auth = await getTokenPayload(request)
   const payload = auth.payload
 
+  // The two portal pages that exist precisely because the visitor has no session
+  // yet. The matcher covers /portal/:path*, so without this they fall into the
+  // redirect below -- which sent an invitee holding a valid activation link to
+  // the staff login, with the token stripped, and no way back to the page that
+  // was supposed to create their account.
+  //
+  // Someone already signed in has no business on the sign-in screen, so they go
+  // straight through to the portal. Activation is left reachable either way: a
+  // signed-in user may still be redeeming an invite for a different account.
+  if (isPublicPortalPath(path)) {
+    if (payload && path === PORTAL_LOGIN_PATH) {
+      return redirectWithHeaders("/portal", request, requestId)
+    }
+    return nextWithHeaders(requestId, request)
+  }
+
+  // A client signing in to see their own stock should not be handed a screen
+  // about warehouse execution and freight forwarding. Anything under /portal
+  // bounces to the portal's own sign-in; everything else keeps the staff login.
+  const signInPath = signInPathFor(path)
+
   if (!payload) {
     if (auth.tokenState === "invalid") {
       securityTelemetry.onEvent("proxy_invalid_access_token", `path=${path}`)
     }
-    const loginUrl = new URL("/login", request.url)
+    const loginUrl = new URL(signInPath, request.url)
     loginUrl.searchParams.set("next", path)
     const response = NextResponse.redirect(loginUrl)
     return applyEnterpriseHeaders(response, requestId, request)
   }
   if ((payload.actorType ?? "").toLowerCase() === "mobile") {
     securityTelemetry.onEvent("proxy_mobile_actor_token_rejected", `path=${path}`)
-    const loginUrl = new URL("/login", request.url)
+    const loginUrl = new URL(signInPath, request.url)
     loginUrl.searchParams.set("next", path)
     loginUrl.searchParams.set("error", "session_scope")
     const response = NextResponse.redirect(loginUrl)

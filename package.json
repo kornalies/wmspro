@@ -47,6 +47,7 @@
     "test:billing-cycle": "node tests/billing-cycle.mjs",
     "test:migration-targets": "node tests/migration-targets.mjs",
     "test:billing-cron": "node scripts/db/run-with-env.mjs tests/billing-cron.mjs",
+    "test:portal": "node scripts/db/run-with-env.mjs tests/portal.mjs",
     "test:suites": "node scripts/ci/run-suites.mjs"
   },
   "dependencies": {
