@@ -47,6 +47,10 @@ type GrnQueryParams = {
   client_id?: string
   date_from?: string
   date_to?: string
+  // Server-side, for the same reason as the DO list: the response is one page, so
+  // sorting in the browser could only ever reorder that page.
+  sort_by?: string
+  sort_dir?: "asc" | "desc"
 }
 
 function buildQuery(params: GrnQueryParams) {
@@ -61,6 +65,8 @@ function buildQuery(params: GrnQueryParams) {
   if (params.warehouse_id && params.warehouse_id !== "all") {
     sp.set("warehouse_id", params.warehouse_id)
   }
+  if (params.sort_by) sp.set("sort_by", params.sort_by)
+  if (params.sort_dir) sp.set("sort_dir", params.sort_dir)
   return sp.toString()
 }
 

@@ -51,7 +51,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 
 type ClientRow = {
   id: number
@@ -109,6 +111,21 @@ type SortKey =
   | "effective_from"
   | "effective_to"
   | "billing_cycle"
+
+// All three rate columns are `numeric` in Postgres and therefore arrive as strings, so
+// the old `typeof === "number"` branch never fired and they were compared as text with
+// raw `>` / `<`. Worse, the fallback lowercased through `|| ""`, which turned a real
+// rate of 0 into a blank and made it compare equal to everything.
+const SORT_KINDS: Record<SortKey, ValueKind> = {
+  contract_code: "text",
+  client_name: "text",
+  storage_rate_per_unit: "number",
+  handling_rate_per_unit: "number",
+  minimum_guarantee_amount: "number",
+  effective_from: "date",
+  effective_to: "date",
+  billing_cycle: "text",
+}
 
 const PAGE_SIZE = 10
 const today = new Date()
@@ -194,29 +211,6 @@ function Metric({
         <div className={`rounded-lg p-2 ${badgeClass(tone)}`}>{icon}</div>
       </CardContent>
     </Card>
-  )
-}
-
-function SortableHead({
-  label,
-  active,
-  dir,
-  onClick,
-  align = "left",
-}: {
-  label: string
-  active: boolean
-  dir: "asc" | "desc"
-  onClick: () => void
-  align?: "left" | "right"
-}) {
-  return (
-    <TableHead className={align === "right" ? "text-right" : ""}>
-      <button className={`inline-flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`} onClick={onClick}>
-        {label}
-        <span className="text-[10px] text-slate-400">{active ? (dir === "asc" ? "↑" : "↓") : ""}</span>
-      </button>
-    </TableHead>
   )
 }
 
@@ -325,14 +319,7 @@ export default function ContractsPage() {
       return matchesTerm && matchesClient && matchesCycle && matchesStatus && startedAfter && endsBefore
     })
 
-    return [...rows].sort((a, b) => {
-      const leftRaw = a[sortKey]
-      const rightRaw = b[sortKey]
-      const left = typeof leftRaw === "number" ? leftRaw : String(leftRaw || "").toLowerCase()
-      const right = typeof rightRaw === "number" ? rightRaw : String(rightRaw || "").toLowerCase()
-      const result = left > right ? 1 : left < right ? -1 : 0
-      return sortDir === "asc" ? result : -result
-    })
+    return sortRows(rows, (row) => row[sortKey], SORT_KINDS[sortKey], sortDir, (row) => row.id)
   }, [clientFilter, cycleFilter, effectiveFromFilter, effectiveToFilter, enrichedContracts, overlappingIds, search, sortDir, sortKey, statusFilter])
 
   const searchSuggestions = useMemo(
@@ -345,12 +332,10 @@ export default function ContractsPage() {
   const contractRefNo = editRow?.contract_code || ""
 
   const sortBy = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"))
-    } else {
-      setSortKey(key)
-      setSortDir("asc")
-    }
+    const next = nextSortState({ key: sortKey, dir: sortDir }, key, SORT_KINDS[key])
+    setSortKey(next.key)
+    setSortDir(next.dir)
+    setCurrentPage(1)
   }
 
   const clearFilters = () => {

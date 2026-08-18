@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner"
 
 import { apiClient } from "@/lib/api-client"
+import { inferValueKind, makeComparator, nextSortState } from "@/lib/table-sort"
 import { downloadFile } from "@/lib/utils"
 import { exportReportToExcel, exportReportToPDF } from "@/lib/export-utils"
 import { Badge } from "@/components/ui/badge"
@@ -376,14 +377,18 @@ export default function ReportsPage() {
     if (reportType === "client_wise") rows = analytics as unknown as Array<Record<string, unknown>>
     rows = rows.filter(filterText)
     if (sortKey) {
-      rows = [...rows].sort((a, b) => {
-        const av = a[sortKey]
-        const bv = b[sortKey]
-        const an = Number(av)
-        const bn = Number(bv)
-        const result = Number.isFinite(an) && Number.isFinite(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""))
-        return sortDirection === "asc" ? result : -result
-      })
+      // Five report shapes share this table, so the column kind is inferred rather than
+      // declared -- but ONCE per column, from the whole column. The old code decided per
+      // comparison with Number.isFinite(Number(v)), which classified "" and null as the
+      // number 0: in a column with gaps, blank-vs-blank then compared numerically while
+      // blank-vs-value compared as text. That is an inconsistent comparator, and sort()
+      // is entitled to produce anything at all when given one.
+      const kind = inferValueKind(rows.map((row) => row[sortKey]))
+      // These rows have no id, so the pre-sort position is the tiebreak that keeps equal
+      // keys from reshuffling on every render.
+      const indexed = rows.map((row, index) => ({ row, index }))
+      indexed.sort(makeComparator((entry) => entry.row[sortKey], kind, sortDirection, (entry) => entry.index))
+      rows = indexed.map((entry) => entry.row)
     }
     return rows
   }, [reportType, stockSummary, movementReport, gateInReport, slowMoving, analytics, tableSearch, sortKey, sortDirection])
@@ -559,8 +564,11 @@ export default function ReportsPage() {
   }
 
   const sortBy = (column: string) => {
-    setSortKey(column)
-    setSortDirection((current) => (sortKey === column && current === "desc" ? "asc" : "desc"))
+    const kind = inferValueKind(activeRows.map((row) => row[column]))
+    const next = nextSortState({ key: sortKey, dir: sortDirection }, column, kind)
+    setSortKey(next.key)
+    setSortDirection(next.dir)
+    setPage(1)
   }
 
   return (

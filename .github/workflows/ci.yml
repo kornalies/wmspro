@@ -44,6 +44,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Pure arithmetic, no database and no server -- so it belongs in this job rather
+      # than db-suites, where it would only run behind a Postgres service it never uses.
+      - name: Table sort suite
+        run: npm run test:table-sort
+
       # `npm run build` uses --experimental-build-mode=compile, which skips type
       # checking -- without this step type errors reach main with CI green.
       - name: Typecheck

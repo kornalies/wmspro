@@ -7,6 +7,7 @@ import { createGrnWithLineItems } from "@/lib/grn-service"
 import { confirmGrnInTransaction, GrnConfirmError } from "@/lib/grn-confirm"
 import { ensureGrnManualSchema, ensureStockPutawaySchema } from "@/lib/db-bootstrap"
 import { fail, ok, paginated } from "@/lib/api-response"
+import { buildOrderBy, type SortColumnMap } from "@/lib/api-sort"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
@@ -437,6 +438,27 @@ function normalizeCreateGrnPayload(body: unknown) {
   }
 }
 
+// Whitelist of sortable columns for the GRN workbench. Keys match the list's column
+// keys; the values are SQL we wrote, so nothing from the query string reaches the
+// statement text. ORDER BY cannot be parameterised, so a lookup is the only safe form.
+//
+// `source` is not sortable in the UI, and `variance` is a client-side comparison of
+// invoice vs received vs damaged quantities -- both stay out of this map, and variance
+// keeps its page-local sort with a header hint saying so.
+const GRN_SORT_COLUMNS: SortColumnMap = {
+  grn_number: "gh.grn_number",
+  grn_date: "gh.grn_date",
+  client_name: "c.client_name",
+  warehouse_name: "w.warehouse_name",
+  invoice_number: "gh.invoice_number",
+  supplier_name: "gh.supplier_name",
+  created_at: "gh.created_at",
+  created_by_name: "u.full_name",
+  total_items: "gh.total_items",
+  total_quantity: "gh.total_quantity",
+  status: "gh.status",
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
@@ -460,6 +482,13 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search")
     const dateFrom = searchParams.get("date_from")
     const dateTo = searchParams.get("date_to")
+    const orderByClause = buildOrderBy(
+      searchParams.get("sort_by"),
+      searchParams.get("sort_dir"),
+      GRN_SORT_COLUMNS,
+      { key: "created_at", direction: "DESC" },
+      "gh.id"
+    )
 
     const offset = (page - 1) * limit
 
@@ -555,7 +584,7 @@ export async function GET(request: NextRequest) {
       JOIN warehouses w ON gh.warehouse_id = w.id AND w.company_id = gh.company_id
       LEFT JOIN users u ON gh.created_by = u.id AND u.company_id = gh.company_id
       ${whereClause}
-      ORDER BY gh.created_at DESC
+      ${orderByClause}
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       dataParams
     )

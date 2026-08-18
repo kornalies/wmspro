@@ -51,7 +51,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 
 type WarehouseRow = {
   id: number
@@ -80,6 +82,20 @@ type WarehouseRow = {
 
 type StatusFilter = "all" | "active" | "inactive" | "mapped" | "missing-coordinates" | "layout-missing"
 type SortKey = "warehouse_code" | "warehouse_name" | "city" | "state" | "is_active" | "total_zones" | "active_skus"
+
+// Only the three text columns have headers wired today, so this screen's copy of the
+// `typeof === "number"` bug was latent. total_zones and active_skus are COUNT()
+// aggregates, which arrive as strings -- they would have broken the moment somebody
+// made those headers clickable.
+const SORT_KINDS: Record<SortKey, ValueKind> = {
+  warehouse_code: "text",
+  warehouse_name: "text",
+  city: "text",
+  state: "text",
+  is_active: "boolean",
+  total_zones: "number",
+  active_skus: "number",
+}
 
 const WarehouseLocationMap = dynamic(
   () => import("@/components/admin/WarehouseLocationMap"),
@@ -277,14 +293,7 @@ export default function WarehousesPage() {
       return matchesSearch && matchesStatus && matchesRegion && matchesState
     })
 
-    return [...rows].sort((a, b) => {
-      const leftRaw = a[sortKey]
-      const rightRaw = b[sortKey]
-      const left = typeof leftRaw === "number" ? leftRaw : String(leftRaw ?? "").toLowerCase()
-      const right = typeof rightRaw === "number" ? rightRaw : String(rightRaw ?? "").toLowerCase()
-      const result = typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right))
-      return sortDir === "asc" ? result : -result
-    })
+    return sortRows(rows, (row) => row[sortKey], SORT_KINDS[sortKey], sortDir, (row) => row.id)
   }, [regionFilter, search, sortDir, sortKey, stateFilter, statusFilter, warehouses])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / WAREHOUSES_PER_PAGE))
@@ -323,12 +332,10 @@ export default function WarehousesPage() {
   }
 
   const sortBy = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"))
-      return
-    }
-    setSortKey(key)
-    setSortDir("asc")
+    const next = nextSortState({ key: sortKey, dir: sortDir }, key, SORT_KINDS[key])
+    setSortKey(next.key)
+    setSortDir(next.dir)
+    setCurrentPage(1)
   }
 
   const toggleSelect = (id: number) => {
@@ -803,15 +810,6 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   )
 }
 
-function SortableHead({ label, active, dir, onClick }: { label: string; active: boolean; dir: "asc" | "desc"; onClick: () => void }) {
-  return (
-    <TableHead>
-      <button type="button" className="font-semibold hover:text-blue-700" onClick={onClick}>
-        {label}{active ? (dir === "asc" ? " ↑" : " ↓") : ""}
-      </button>
-    </TableHead>
-  )
-}
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
