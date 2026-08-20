@@ -1,12 +1,18 @@
 "use client"
 
-import { useEffect, useState } from "react"
+/**
+ * The agreed service levels, and whether they are being met.
+ *
+ * Named "Performance" in the nav: SLA is the contract, but what a client opens this
+ * screen to find out is how the last ninety days went. The targets stay editable
+ * for portal admins who hold portal.sla.manage; everyone else reads them.
+ */
 
-type PortalClient = {
-  id: number
-  client_code: string
-  client_name: string
-}
+import { useCallback, useEffect, useState } from "react"
+
+import { PortalPage } from "@/components/portal/PortalPage"
+import { usePortalScope } from "@/components/portal/portal-scope"
+import { toNumber } from "@/lib/portal-format"
 
 type SlaResponse = {
   policy: {
@@ -27,179 +33,247 @@ type SlaResponse = {
   }
 }
 
-export default function PortalSlaPage() {
-  const [clients, setClients] = useState<PortalClient[]>([])
-  const [clientId, setClientId] = useState<number | null>(null)
+type FormState = {
+  dispatch_target_hours: string
+  invoice_approval_due_days: string
+  dispute_resolution_hours: string
+  warning_threshold_pct: string
+}
+
+const FIELDS: Array<{ key: keyof FormState; label: string; hint: string }> = [
+  { key: "dispatch_target_hours", label: "Dispatch target", hint: "Hours from order to dispatch" },
+  { key: "invoice_approval_due_days", label: "Invoice approval window", hint: "Days to approve an invoice" },
+  { key: "dispute_resolution_hours", label: "Dispute resolution target", hint: "Hours to resolve a dispute" },
+  { key: "warning_threshold_pct", label: "Warning threshold", hint: "Flag below this compliance %" },
+]
+
+/**
+ * A compliance figure needs a verdict attached, or the reader has to remember the
+ * threshold to know whether 88% is fine. The threshold is the client's own.
+ */
+function meter(pct: number, threshold: number) {
+  if (pct >= threshold) return { tone: "text-emerald-700", bar: "bg-emerald-500", verdict: "On track" }
+  if (pct >= threshold - 10) return { tone: "text-amber-700", bar: "bg-amber-500", verdict: "Slipping" }
+  return { tone: "text-red-700", bar: "bg-red-500", verdict: "Below target" }
+}
+
+function ComplianceCard({
+  title,
+  pct,
+  detail,
+  threshold,
+  loading,
+}: {
+  title: string
+  pct: number
+  detail: string
+  threshold: number
+  loading: boolean
+}) {
+  const { tone, bar, verdict } = meter(pct, threshold)
+  return (
+    <article className="rounded-xl border border-neutral-200 bg-white p-5">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{title}</h3>
+      {loading ? (
+        <div className="mt-3 space-y-2">
+          <div className="h-8 w-24 animate-pulse rounded bg-neutral-200" />
+          <div className="h-2 w-full animate-pulse rounded bg-neutral-100" />
+        </div>
+      ) : (
+        <>
+          <div className="mt-2 flex items-baseline gap-2">
+            <p className={`text-3xl font-semibold tabular-nums ${tone}`}>{pct.toFixed(1)}%</p>
+            <p className={`text-sm font-medium ${tone}`}>{verdict}</p>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-neutral-100">
+            <div
+              className={`h-full rounded-full ${bar}`}
+              style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+              role="img"
+              aria-label={`${pct.toFixed(1)} percent, target ${threshold} percent`}
+            />
+          </div>
+          <p className="mt-2 text-sm text-neutral-600">{detail}</p>
+          <p className="mt-0.5 text-xs text-neutral-400">Your target is {threshold}%</p>
+        </>
+      )}
+    </article>
+  )
+}
+
+export default function PortalPerformancePage() {
+  const { client, can, canManageSla, doLabel, loading: scopeLoading } = usePortalScope()
+  const clientId = client?.id ?? null
+
   const [data, setData] = useState<SlaResponse | null>(null)
+  const [form, setForm] = useState<FormState>({
+    dispatch_target_hours: "48",
+    invoice_approval_due_days: "5",
+    dispute_resolution_hours: "72",
+    warning_threshold_pct: "90",
+  })
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
-  const [canManage, setCanManage] = useState(false)
+  const [error, setError] = useState("")
+  const [saved, setSaved] = useState("")
 
-  const [dispatchTargetHours, setDispatchTargetHours] = useState("48")
-  const [invoiceApprovalDueDays, setInvoiceApprovalDueDays] = useState("5")
-  const [disputeResolutionHours, setDisputeResolutionHours] = useState("72")
-  const [warningThresholdPct, setWarningThresholdPct] = useState("90")
-
-  async function loadSla(targetClientId: number) {
+  const load = useCallback(async () => {
+    if (!clientId) return
     setLoading(true)
     setError("")
-    const res = await fetch(`/api/portal/sla?client_id=${targetClientId}`, { cache: "no-store" })
-    const json = await res.json()
-    if (!res.ok) {
-      setError(json?.error?.message || "Failed to load SLA")
+    try {
+      const res = await fetch(`/api/portal/sla?client_id=${clientId}`, { cache: "no-store" })
+      const json = await res.json()
+      if (!res.ok) {
+        setError(json?.error?.message || "Please try again in a moment.")
+        setData(null)
+      } else {
+        const payload = (json?.data || null) as SlaResponse | null
+        setData(payload)
+        setForm({
+          dispatch_target_hours: String(payload?.policy?.dispatch_target_hours ?? 48),
+          invoice_approval_due_days: String(payload?.policy?.invoice_approval_due_days ?? 5),
+          dispute_resolution_hours: String(payload?.policy?.dispute_resolution_hours ?? 72),
+          warning_threshold_pct: String(payload?.policy?.warning_threshold_pct ?? 90),
+        })
+      }
+    } catch {
+      setError("Check your connection and try again.")
       setData(null)
-    } else {
-      const payload = (json?.data || null) as SlaResponse | null
-      setData(payload)
-      setDispatchTargetHours(String(payload?.policy?.dispatch_target_hours ?? 48))
-      setInvoiceApprovalDueDays(String(payload?.policy?.invoice_approval_due_days ?? 5))
-      setDisputeResolutionHours(String(payload?.policy?.dispute_resolution_hours ?? 72))
-      setWarningThresholdPct(String(payload?.policy?.warning_threshold_pct ?? 90))
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  }, [clientId])
 
   useEffect(() => {
-    void (async () => {
-      const policyRes = await fetch("/api/v1/policy", { cache: "no-store" })
-      const policyJson = await policyRes.json()
-      const permissions = (policyJson?.data?.permissions || []) as string[]
-      setCanManage(permissions.includes("portal.sla.manage"))
+    if (!can.performance) {
+      setLoading(false)
+      return
+    }
+    void load()
+  }, [can.performance, load])
 
-      const clientsRes = await fetch("/api/portal/clients", { cache: "no-store" })
-      const clientsJson = await clientsRes.json()
-      const loadedClients = (clientsJson?.data || []) as PortalClient[]
-      setClients(loadedClients)
-      const selected = loadedClients[0]?.id ?? null
-      setClientId(selected)
-      if (selected) await loadSla(selected)
-      else setLoading(false)
-    })()
-  }, [])
-
-
-  async function saveSla() {
+  async function saveTargets() {
     if (!clientId) return
     setSaving(true)
     setError("")
-    const res = await fetch("/api/portal/sla", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: clientId,
-        dispatch_target_hours: Number(dispatchTargetHours || 48),
-        invoice_approval_due_days: Number(invoiceApprovalDueDays || 5),
-        dispute_resolution_hours: Number(disputeResolutionHours || 72),
-        warning_threshold_pct: Number(warningThresholdPct || 90),
-      }),
-    })
-    const json = await res.json()
-    if (!res.ok) {
-      setError(json?.error?.message || "Failed to save SLA")
-    } else {
-      await loadSla(clientId)
+    setSaved("")
+    try {
+      const res = await fetch("/api/portal/sla", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          dispatch_target_hours: Number(form.dispatch_target_hours || 48),
+          invoice_approval_due_days: Number(form.invoice_approval_due_days || 5),
+          dispute_resolution_hours: Number(form.dispute_resolution_hours || 72),
+          warning_threshold_pct: Number(form.warning_threshold_pct || 90),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        setError(json?.error?.message || "Your targets were not saved.")
+      } else {
+        setSaved("Targets saved.")
+        await load()
+      }
+    } catch {
+      setError("Your targets were not saved. Check your connection and try again.")
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
+  const threshold = toNumber(data?.policy?.warning_threshold_pct ?? 90)
+  const orderPct = toNumber(data?.kpi?.order_on_time_pct ?? 0)
+  const disputePct = toNumber(data?.kpi?.dispute_sla_pct ?? 0)
+  const busy = loading || scopeLoading
+
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Portal SLA</h1>
-        <a href="/portal" className="rounded-md border px-4 py-2 text-sm">
-          Back to Portal
-        </a>
-      </div>
-
-      <div className="mb-4 rounded-lg border p-4">
-        <label className="mb-2 block text-sm font-medium">Client</label>
-        <select
-          className="w-full rounded-md border px-3 py-2"
-          value={clientId ?? ""}
-          onChange={(e) => {
-            const nextClientId = Number(e.target.value)
-            setClientId(nextClientId)
-            if (nextClientId) void loadSla(nextClientId)
-          }}
-        >
-          {clients.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.client_name} ({client.client_code})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? <p className="text-sm text-neutral-600">Loading SLA...</p> : null}
-      {error ? <p className="mb-3 text-sm text-red-600">{error}</p> : null}
-
-      {!loading && data ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          <section className="rounded-lg border p-4">
-            <h2 className="mb-3 text-lg font-medium">SLA Policy</h2>
-            <div className="grid gap-2">
-              <label className="text-sm">
-                Dispatch Target (hours)
-                <input
-                  className="mt-1 w-full rounded border px-3 py-2"
-                  value={dispatchTargetHours}
-                  onChange={(e) => setDispatchTargetHours(e.target.value)}
-                  disabled={!canManage}
-                />
-              </label>
-              <label className="text-sm">
-                Invoice Approval Due (days)
-                <input
-                  className="mt-1 w-full rounded border px-3 py-2"
-                  value={invoiceApprovalDueDays}
-                  onChange={(e) => setInvoiceApprovalDueDays(e.target.value)}
-                  disabled={!canManage}
-                />
-              </label>
-              <label className="text-sm">
-                Dispute Resolution (hours)
-                <input
-                  className="mt-1 w-full rounded border px-3 py-2"
-                  value={disputeResolutionHours}
-                  onChange={(e) => setDisputeResolutionHours(e.target.value)}
-                  disabled={!canManage}
-                />
-              </label>
-              <label className="text-sm">
-                Warning Threshold (%)
-                <input
-                  className="mt-1 w-full rounded border px-3 py-2"
-                  value={warningThresholdPct}
-                  onChange={(e) => setWarningThresholdPct(e.target.value)}
-                  disabled={!canManage}
-                />
-              </label>
-              {canManage ? (
-                <button
-                  className="mt-2 rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50"
-                  disabled={saving}
-                  onClick={saveSla}
-                >
-                  {saving ? "Saving..." : "Save SLA"}
-                </button>
-              ) : (
-                <p className="mt-2 text-xs text-neutral-500">Read-only: SLA can be edited by authorized portal admins.</p>
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-lg border p-4">
-            <h2 className="mb-3 text-lg font-medium">SLA KPI (90 days)</h2>
-            <p className="text-sm">Orders: {data.kpi.total_orders_90d ?? 0}</p>
-            <p className="text-sm">On-time Orders: {data.kpi.on_time_orders_90d ?? 0}</p>
-            <p className="text-sm">On-time %: {Number(data.kpi.order_on_time_pct ?? 0).toFixed(2)}%</p>
-            <p className="mt-3 text-sm">Resolved Disputes: {data.kpi.resolved_disputes_90d ?? 0}</p>
-            <p className="text-sm">Resolved within SLA: {data.kpi.in_sla_disputes_90d ?? 0}</p>
-            <p className="text-sm">Dispute SLA %: {Number(data.kpi.dispute_sla_pct ?? 0).toFixed(2)}%</p>
-          </section>
+    <PortalPage
+      title="Performance"
+      description="How we have performed against your agreed service levels over the last 90 days."
+      denied={
+        can.performance
+          ? null
+          : { reason: "Ask your warehouse provider to enable service level reporting on your portal account." }
+      }
+    >
+      {error ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <p className="text-sm text-red-800">{error}</p>
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100"
+          >
+            Try again
+          </button>
         </div>
       ) : null}
-    </main>
+
+      <section className="grid gap-3 md:grid-cols-2">
+        <ComplianceCard
+          title={`${doLabel} dispatch on time`}
+          pct={orderPct}
+          threshold={threshold}
+          loading={busy}
+          detail={`${toNumber(data?.kpi?.on_time_orders_90d)} of ${toNumber(data?.kpi?.total_orders_90d)} orders met the ${toNumber(data?.policy?.dispatch_target_hours ?? 48)} hour target.`}
+        />
+        <ComplianceCard
+          title="Disputes resolved in time"
+          pct={disputePct}
+          threshold={threshold}
+          loading={busy}
+          detail={`${toNumber(data?.kpi?.in_sla_disputes_90d)} of ${toNumber(data?.kpi?.resolved_disputes_90d)} resolved disputes met the ${toNumber(data?.policy?.dispute_resolution_hours ?? 72)} hour target.`}
+        />
+      </section>
+
+      <section className="rounded-xl border border-neutral-200 bg-white p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold text-neutral-900">Agreed targets</h2>
+          {!canManageSla ? (
+            <p className="text-xs text-neutral-500">
+              Read only — targets are set by your account administrator.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {FIELDS.map((field) => (
+            <div key={field.key}>
+              <label htmlFor={`sla-${field.key}`} className="block text-sm font-medium text-neutral-800">
+                {field.label}
+              </label>
+              <input
+                id={`sla-${field.key}`}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                value={form[field.key]}
+                disabled={!canManageSla || busy}
+                onChange={(event) => setForm((current) => ({ ...current, [field.key]: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm tabular-nums disabled:bg-neutral-50 disabled:text-neutral-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              />
+              <p className="mt-1 text-xs text-neutral-500">{field.hint}</p>
+            </div>
+          ))}
+        </div>
+
+        {canManageSla ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={saveTargets}
+              disabled={saving || busy}
+              className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Save targets"}
+            </button>
+            {saved ? <p className="text-sm text-emerald-700">{saved}</p> : null}
+          </div>
+        ) : null}
+      </section>
+    </PortalPage>
   )
 }

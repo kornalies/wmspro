@@ -89,6 +89,14 @@ function loadStoredDraft() {
 
 interface GRNFormProps {
   draftId?: number
+  /**
+   * The client portal ASN request this receipt answers, when staff arrived here
+   * from the shipment-notice queue. It rides on the header so the saved GRN
+   * points back at the announcement, which is what lets the client see their
+   * request was actually received. It never changes what is booked in: the
+   * quantities below are still whatever the operator counted on the dock.
+   */
+  asnRequestId?: number
   initialData?: {
     client_id?: number
     warehouse_id?: number
@@ -120,7 +128,7 @@ interface GRNFormProps {
   } | null
 }
 
-export function GRNForm({ draftId, initialData }: GRNFormProps) {
+export function GRNForm({ draftId, initialData, asnRequestId }: GRNFormProps) {
   const router = useRouter()
   const createMutation = useCreateGRN()
   const updateMutation = useUpdateGRN()
@@ -426,7 +434,12 @@ export function GRNForm({ draftId, initialData }: GRNFormProps) {
         pallet_count: data.pallet_count,
         weight_kg: data.weight_kg,
         handling_type: data.handling_type,
-        source_channel: initialData ? "WEB_OCR_REVIEWED" : "WEB_MANUAL",
+        source_channel: asnRequestId
+          ? "WEB_ASN"
+          : initialData
+            ? "WEB_OCR_REVIEWED"
+            : "WEB_MANUAL",
+        asn_request_id: asnRequestId,
         status,
         total_items: processedLineItems.length,
         total_quantity: processedLineItems.reduce((sum, item) => sum + item.quantity, 0),

@@ -1,12 +1,19 @@
 "use client"
 
-import { useEffect, useState } from "react"
+/**
+ * The account at a glance, in one printable place.
+ *
+ * Deliberately the same figures as the overview screen rather than a second set:
+ * two screens disagreeing about how many invoices are open is worse than one
+ * screen repeating itself. The overview is for acting on; this is for reading and
+ * exporting.
+ */
 
-type PortalClient = {
-  id: number
-  client_code: string
-  client_name: string
-}
+import { useCallback, useEffect, useState } from "react"
+
+import { PortalPage } from "@/components/portal/PortalPage"
+import { usePortalScope } from "@/components/portal/portal-scope"
+import { formatMoney, formatQuantity, toNumber } from "@/lib/portal-format"
 
 type PortalSummary = {
   stock?: { in_stock_units?: number; dispatched_units?: number }
@@ -18,117 +25,151 @@ type PortalSummary = {
     total_billed?: number
     outstanding_amount?: number
   }
-  disputes?: {
-    total_disputes?: number
-    open_disputes?: number
-  }
+  disputes?: { total_disputes?: number; open_disputes?: number }
   sla?: {
     dispatch_target_hours?: number
-    warning_threshold_pct?: number
     total_orders_90d?: number
     on_time_orders_90d?: number
     on_time_pct?: number
   }
 }
 
+type Panel = { title: string; lines: Array<{ label: string; value: string }> }
+
 export default function PortalReportsPage() {
-  const [clients, setClients] = useState<PortalClient[]>([])
-  const [clientId, setClientId] = useState<number | null>(null)
+  const { client, can, doLabel, loading: scopeLoading } = usePortalScope()
+  const clientId = client?.id ?? null
+
   const [summary, setSummary] = useState<PortalSummary | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-  useEffect(() => {
-    void (async () => {
-      setLoading(true)
-      const clientsRes = await fetch("/api/portal/clients", { cache: "no-store" })
-      const clientsJson = await clientsRes.json()
-      const loaded = (clientsJson?.data || []) as PortalClient[]
-      setClients(loaded)
-      const selected = loaded[0]?.id ?? null
-      setClientId(selected)
-      if (selected) {
-        const reportRes = await fetch(`/api/portal/reports?client_id=${selected}`, { cache: "no-store" })
-        const reportJson = await reportRes.json()
-        setSummary((reportJson?.data || null) as PortalSummary | null)
-      }
-      setLoading(false)
-    })()
-  }, [])
-
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!clientId) return
-    void (async () => {
-      const reportRes = await fetch(`/api/portal/reports?client_id=${clientId}`, { cache: "no-store" })
-      const reportJson = await reportRes.json()
-      setSummary((reportJson?.data || null) as PortalSummary | null)
-    })()
+    setLoading(true)
+    setError("")
+    try {
+      const res = await fetch(`/api/portal/reports?client_id=${clientId}`, { cache: "no-store" })
+      const json = await res.json()
+      if (!res.ok) {
+        setError(json?.error?.message || "Please try again in a moment.")
+        setSummary(null)
+      } else {
+        setSummary((json?.data || null) as PortalSummary | null)
+      }
+    } catch {
+      setError("Check your connection and try again.")
+      setSummary(null)
+    } finally {
+      setLoading(false)
+    }
   }, [clientId])
 
+  useEffect(() => {
+    if (!can.reports) {
+      setLoading(false)
+      return
+    }
+    void load()
+  }, [can.reports, load])
+
+  const panels: Panel[] = [
+    {
+      title: "Inventory",
+      lines: [
+        { label: "In stock", value: formatQuantity(summary?.stock?.in_stock_units) },
+        { label: "Dispatched to date", value: formatQuantity(summary?.stock?.dispatched_units) },
+      ],
+    },
+    {
+      title: `${doLabel} orders`,
+      lines: [
+        { label: "Total raised", value: formatQuantity(summary?.orders?.total_do) },
+        { label: "Fulfilled", value: formatQuantity(summary?.orders?.fulfilled_do) },
+      ],
+    },
+    {
+      title: "Inbound receipts",
+      lines: [
+        { label: "Receipts booked", value: formatQuantity(summary?.grn?.total_grn) },
+        { label: "Confirmed", value: formatQuantity(summary?.grn?.confirmed_grn) },
+      ],
+    },
+    {
+      title: "Billing",
+      lines: [
+        { label: "Invoices issued", value: formatQuantity(summary?.billing?.total_invoices) },
+        { label: "Overdue", value: formatQuantity(summary?.billing?.overdue_invoices) },
+        { label: "Outstanding", value: formatMoney(summary?.billing?.outstanding_amount) },
+      ],
+    },
+    {
+      title: "Disputes",
+      lines: [
+        { label: "Raised", value: formatQuantity(summary?.disputes?.total_disputes) },
+        { label: "Still open", value: formatQuantity(summary?.disputes?.open_disputes) },
+      ],
+    },
+    {
+      title: "Service level (90 days)",
+      lines: [
+        { label: "Dispatch target", value: `${formatQuantity(summary?.sla?.dispatch_target_hours ?? 48)} hrs` },
+        {
+          label: "On time",
+          value: `${formatQuantity(summary?.sla?.on_time_orders_90d)} of ${formatQuantity(summary?.sla?.total_orders_90d)}`,
+        },
+        { label: "Compliance", value: `${toNumber(summary?.sla?.on_time_pct ?? 100).toFixed(1)}%` },
+      ],
+    },
+  ]
+
+  const busy = loading || scopeLoading
+
   return (
-    <main className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Portal Reports</h1>
-        <a href="/portal" className="rounded-md border px-4 py-2 text-sm">
-          Back to Portal
-        </a>
-      </div>
-
-      <div className="rounded-lg border p-4">
-        <label className="mb-2 block text-sm font-medium">Client</label>
-        <select
-          className="w-full rounded-md border px-3 py-2"
-          value={clientId ?? ""}
-          onChange={(e) => setClientId(Number(e.target.value))}
-        >
-          {clients.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.client_name} ({client.client_code})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? (
-        <p className="text-sm text-neutral-600">Loading reports...</p>
+    <PortalPage
+      title="Reports"
+      description={client ? `Account summary for ${client.client_name}.` : "Account summary."}
+      denied={
+        can.reports
+          ? null
+          : { reason: "Ask your warehouse provider to enable reporting on your portal account." }
+      }
+    >
+      {error ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="text-sm font-medium text-red-900">We could not load your summary.</p>
+          <p className="mt-1 text-sm text-red-800">{error}</p>
+          <button
+            type="button"
+            onClick={load}
+            className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100"
+          >
+            Try again
+          </button>
+        </div>
       ) : (
-        <section className="grid gap-4 md:grid-cols-3">
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">Inventory</p>
-            <p className="mt-2 text-sm">In Stock: {summary?.stock?.in_stock_units ?? 0}</p>
-            <p className="text-sm">Dispatched: {summary?.stock?.dispatched_units ?? 0}</p>
-          </article>
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">Orders</p>
-            <p className="mt-2 text-sm">Total: {summary?.orders?.total_do ?? 0}</p>
-            <p className="text-sm">Fulfilled: {summary?.orders?.fulfilled_do ?? 0}</p>
-          </article>
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">Billing</p>
-            <p className="mt-2 text-sm">Invoices: {summary?.billing?.total_invoices ?? 0}</p>
-            <p className="text-sm">Overdue: {summary?.billing?.overdue_invoices ?? 0}</p>
-            <p className="text-sm">Outstanding: INR {Number(summary?.billing?.outstanding_amount ?? 0).toFixed(2)}</p>
-          </article>
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">Disputes</p>
-            <p className="mt-2 text-sm">Total: {summary?.disputes?.total_disputes ?? 0}</p>
-            <p className="text-sm">Open: {summary?.disputes?.open_disputes ?? 0}</p>
-          </article>
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">SLA</p>
-            <p className="mt-2 text-sm">Target: {summary?.sla?.dispatch_target_hours ?? 48} hrs</p>
-            <p className="text-sm">
-              On-Time: {summary?.sla?.on_time_orders_90d ?? 0}/{summary?.sla?.total_orders_90d ?? 0}
-            </p>
-            <p className="text-sm">Compliance: {Number(summary?.sla?.on_time_pct ?? 100).toFixed(2)}%</p>
-          </article>
-          <article className="rounded-lg border p-4">
-            <p className="text-xs uppercase text-neutral-500">GRN</p>
-            <p className="mt-2 text-sm">Total: {summary?.grn?.total_grn ?? 0}</p>
-            <p className="text-sm">Confirmed: {summary?.grn?.confirmed_grn ?? 0}</p>
-          </article>
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {panels.map((panel) => (
+            <article key={panel.title} className="rounded-xl border border-neutral-200 bg-white p-4">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{panel.title}</h2>
+              <dl className="mt-3 space-y-2">
+                {panel.lines.map((line) => (
+                  <div key={line.label} className="flex items-baseline justify-between gap-3">
+                    <dt className="text-sm text-neutral-600">{line.label}</dt>
+                    <dd className="text-sm font-semibold tabular-nums text-neutral-900">
+                      {busy ? (
+                        <span className="inline-block h-3.5 w-16 animate-pulse rounded bg-neutral-200" />
+                      ) : (
+                        line.value
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </article>
+          ))}
         </section>
       )}
-    </main>
+    </PortalPage>
   )
 }
-

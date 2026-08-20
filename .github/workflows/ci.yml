@@ -49,6 +49,11 @@ jobs:
       - name: Table sort suite
         run: npm run test:table-sort
 
+      # Also pure: the portal's client-scope resolution and gate combination, which
+      # decide whether the UI offers a control the API would refuse.
+      - name: Portal access suite
+        run: npm run test:portal-access
+
       # `npm run build` uses --experimental-build-mode=compile, which skips type
       # checking -- without this step type errors reach main with CI green.
       - name: Typecheck

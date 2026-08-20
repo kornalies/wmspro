@@ -82,6 +82,8 @@ export type GRNFormPayload = {
     weight_kg?: number
     handling_type?: "MACHINE" | "MANUAL"
     source_channel?: string
+    /** Set when the receipt was started from a client portal shipment notice. */
+    asn_request_id?: number
     status?: "DRAFT" | "CONFIRMED"
     total_items: number
     total_quantity: number
