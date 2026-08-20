@@ -1,12 +1,19 @@
 "use client"
 
-import { useEffect, useState } from "react"
+/**
+ * Outbound orders, and how far along each one is.
+ *
+ * Still a list rather than a detail view -- a client can see that an order went out
+ * short but not yet which line was short. That is the next thing this screen needs.
+ */
 
-type PortalClient = {
-  id: number
-  client_code: string
-  client_name: string
-}
+import { useCallback, useEffect, useMemo, useState } from "react"
+
+import { PortalPage } from "@/components/portal/PortalPage"
+import { PortalTable, type PortalColumn } from "@/components/portal/PortalTable"
+import { StatusChip, statusCopy } from "@/components/portal/StatusChip"
+import { usePortalScope } from "@/components/portal/portal-scope"
+import { formatDay, formatQuantity, toNumber } from "@/lib/portal-format"
 
 type OrderRow = {
   id: number
@@ -20,123 +27,170 @@ type OrderRow = {
 }
 
 export default function PortalOrdersPage() {
-  const [clients, setClients] = useState<PortalClient[]>([])
-  const [clientId, setClientId] = useState<number | null>(null)
+  const { client, can, doLabel, loading: scopeLoading } = usePortalScope()
+  const clientId = client?.id ?? null
+
   const [rows, setRows] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
-  const [portalEnabled, setPortalEnabled] = useState(true)
-  const [ordersEnabled, setOrdersEnabled] = useState(true)
-  const [doLabel, setDoLabel] = useState("DO")
+  const [statusFilter, setStatusFilter] = useState("")
 
-  useEffect(() => {
-    void (async () => {
-      setLoading(true)
-      setError("")
-      const policyRes = await fetch("/api/v1/policy", { cache: "no-store" })
-      const policyJson = await policyRes.json()
-      const features = policyJson?.data?.features || {}
-      setPortalEnabled(features.portal !== false)
-      setOrdersEnabled(features.do !== false)
-      setDoLabel(policyJson?.data?.branding?.labels?.do || "DO")
-
-      const clientsRes = await fetch("/api/portal/clients", { cache: "no-store" })
-      const clientsJson = await clientsRes.json()
-      const loadedClients = (clientsJson?.data || []) as PortalClient[]
-      setClients(loadedClients)
-      const selected = loadedClients[0]?.id ?? null
-      setClientId(selected)
-      setLoading(false)
-    })()
-  }, [])
-
-  useEffect(() => {
-    if (!clientId || !portalEnabled || !ordersEnabled) return
-    void (async () => {
-      setLoading(true)
-      setError("")
+  const load = useCallback(async () => {
+    if (!clientId) return
+    setLoading(true)
+    setError("")
+    try {
       const res = await fetch(`/api/portal/orders?client_id=${clientId}`, { cache: "no-store" })
       const json = await res.json()
       if (!res.ok) {
-        setError(json?.error?.message || "Failed to load orders")
+        setError(json?.error?.message || "Please try again in a moment.")
         setRows([])
       } else {
         setRows((json?.data || []) as OrderRow[])
       }
+    } catch {
+      setError("Check your connection and try again.")
+      setRows([])
+    } finally {
       setLoading(false)
-    })()
-  }, [clientId, portalEnabled, ordersEnabled])
+    }
+  }, [clientId])
+
+  useEffect(() => {
+    if (!can.orders) {
+      setLoading(false)
+      return
+    }
+    void load()
+  }, [can.orders, load])
+
+  const columns = useMemo<Array<PortalColumn<OrderRow>>>(
+    () => [
+      {
+        key: "do_number",
+        label: `${doLabel} number`,
+        kind: "text",
+        value: (row) => row.do_number,
+        render: (row) => <span className="font-medium text-neutral-900">{row.do_number}</span>,
+        card: "title",
+      },
+      {
+        key: "status",
+        label: "Status",
+        kind: "text",
+        value: (row) => row.status,
+        render: (row) => <StatusChip status={row.status} />,
+      },
+      {
+        key: "request_date",
+        label: "Requested",
+        kind: "date",
+        value: (row) => row.request_date,
+        render: (row) => formatDay(row.request_date),
+        searchable: false,
+      },
+      {
+        key: "dispatch_date",
+        label: "Dispatched",
+        kind: "date",
+        value: (row) => row.dispatch_date,
+        render: (row) => formatDay(row.dispatch_date),
+        searchable: false,
+      },
+      {
+        key: "total_items",
+        label: "Lines",
+        kind: "number",
+        align: "right",
+        value: (row) => row.total_items,
+        searchable: false,
+      },
+      {
+        key: "total_quantity_requested",
+        label: "Requested qty",
+        kind: "number",
+        align: "right",
+        value: (row) => row.total_quantity_requested,
+        render: (row) => formatQuantity(row.total_quantity_requested),
+        searchable: false,
+      },
+      {
+        key: "total_quantity_dispatched",
+        label: "Dispatched qty",
+        kind: "number",
+        align: "right",
+        value: (row) => row.total_quantity_dispatched,
+        // A short dispatch is the thing a client is scanning for, so it is called
+        // out on the row rather than left as two numbers to subtract.
+        render: (row) => {
+          const requested = toNumber(row.total_quantity_requested)
+          const dispatched = toNumber(row.total_quantity_dispatched)
+          const short = requested - dispatched
+          return (
+            <span>
+              <span className="font-semibold text-neutral-900">{formatQuantity(dispatched)}</span>
+              {short > 0 && dispatched > 0 ? (
+                <span className="ml-1.5 text-xs font-medium text-amber-700">
+                  {formatQuantity(short)} short
+                </span>
+              ) : null}
+            </span>
+          )
+        },
+        searchable: false,
+        card: "figure",
+      },
+    ],
+    [doLabel]
+  )
+
+  const statusOptions = useMemo(() => {
+    const seen = Array.from(new Set(rows.map((row) => row.status).filter(Boolean)))
+    return [
+      { value: "", label: "All statuses" },
+      // The filter reads in the same words as the chips it filters on; offering
+      // PARTIALLY_DISPATCHED in a dropdown next to a "Part dispatched" chip asks
+      // the client to work out that they are the same thing.
+      ...seen.map((status) => ({ value: status, label: statusCopy(status).label })),
+    ]
+  }, [rows])
+
+  const filtered = statusFilter ? rows.filter((row) => row.status === statusFilter) : rows
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Portal {doLabel} Orders</h1>
-        <a href="/portal" className="rounded-md border px-4 py-2 text-sm">
-          Back to Portal
-        </a>
-      </div>
-
-      <div className="mb-4 rounded-lg border p-4">
-        <label className="mb-2 block text-sm font-medium">Client</label>
-        <select
-          className="w-full rounded-md border px-3 py-2"
-          value={clientId ?? ""}
-          onChange={(e) => setClientId(Number(e.target.value))}
-        >
-          {clients.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.client_name} ({client.client_code})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {!portalEnabled || !ordersEnabled ? (
-        <p className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          Order view is disabled by tenant policy.
-        </p>
-      ) : null}
-
-      {loading ? <p className="text-sm text-neutral-600">Loading orders...</p> : null}
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-      {!loading && !error ? (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-neutral-100">
-              <tr>
-                <th className="px-3 py-2 text-left">DO Number</th>
-                <th className="px-3 py-2 text-left">Request Date</th>
-                <th className="px-3 py-2 text-left">Dispatch Date</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                <th className="px-3 py-2 text-right">Items</th>
-                <th className="px-3 py-2 text-right">Qty Requested</th>
-                <th className="px-3 py-2 text-right">Qty Dispatched</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="px-3 py-2">{row.do_number}</td>
-                  <td className="px-3 py-2">{row.request_date || "-"}</td>
-                  <td className="px-3 py-2">{row.dispatch_date || "-"}</td>
-                  <td className="px-3 py-2">{row.status}</td>
-                  <td className="px-3 py-2 text-right">{row.total_items}</td>
-                  <td className="px-3 py-2 text-right">{row.total_quantity_requested}</td>
-                  <td className="px-3 py-2 text-right">{row.total_quantity_dispatched}</td>
-                </tr>
-              ))}
-              {!rows.length ? (
-                <tr>
-                  <td className="px-3 py-4 text-center text-neutral-500" colSpan={7}>
-                    No order records found.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-    </main>
+    <PortalPage
+      title={`${doLabel} Orders`}
+      description="Orders raised against your stock, and what has left the warehouse."
+      denied={
+        can.orders
+          ? null
+          : { reason: "Ask your warehouse provider to enable order visibility on your portal account." }
+      }
+    >
+      <PortalTable
+        rows={filtered}
+        columns={columns}
+        rowKey={(row) => row.id}
+        loading={loading || scopeLoading}
+        error={error}
+        onRetry={load}
+        noun={{ singular: "order", plural: "orders" }}
+        searchPlaceholder={`Search by ${doLabel} number`}
+        initialSort={{ key: "request_date", dir: "desc" }}
+        filters={[
+          {
+            key: "status",
+            label: "Filter by status",
+            value: statusFilter,
+            options: statusOptions,
+            onChange: setStatusFilter,
+          },
+        ]}
+        empty={{
+          title: "No orders yet",
+          body: `Orders appear here as soon as the first ${doLabel} is raised against your stock.`,
+        }}
+      />
+    </PortalPage>
   )
 }
