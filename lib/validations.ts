@@ -42,6 +42,7 @@ export const grnHeaderSchema = z.object({
   handling_type: z.enum(["MACHINE", "MANUAL"]).optional(),
   source_channel: z.string().optional(),
   status: z.enum(["DRAFT", "CONFIRMED"]).optional(),
+  asn_request_id: z.number().int().positive().optional(),
 })
 
 export const grnLineItemSchema = z.object({

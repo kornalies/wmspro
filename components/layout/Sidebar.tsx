@@ -12,6 +12,7 @@ import {
     ClipboardList,
     PackagePlus,
     PackageMinus,
+    PackageSearch,
     Search,
     DoorOpen,
     DoorClosed,
@@ -90,6 +91,12 @@ const sections: SidebarSection[] = [
                 icon: PackagePlus,
                 href: '/grn',
                 color: 'text-violet-500',
+            },
+            {
+                label: 'Client Shipment Notices',
+                icon: PackageSearch,
+                href: '/grn/asn-requests',
+                color: 'text-sky-500',
             },
             {
                 label: 'Mobile GRN Approval',
