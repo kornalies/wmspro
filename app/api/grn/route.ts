@@ -11,6 +11,8 @@ import { buildOrderBy, type SortColumnMap } from "@/lib/api-sort"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
+import { markAsnReceived } from "@/lib/asn"
+import { notifyUsers } from "@/lib/notifications"
 
 type JsonRecord = Record<string, unknown>
 
@@ -430,6 +432,14 @@ function normalizeCreateGrnPayload(body: unknown) {
       (typeof root.source_channel === "string" ? root.source_channel : undefined) ??
       (typeof headerSource.source_channel === "string" ? headerSource.source_channel : undefined) ??
       "MOBILE_OCR",
+    asn_request_id: toPositiveNumber(
+      firstDefined(
+        headerSource.asn_request_id,
+        headerSource.asnRequestId,
+        root.asn_request_id,
+        root.asnRequestId
+      )
+    ),
   }
 
   return {
@@ -635,11 +645,48 @@ export async function POST(request: NextRequest) {
     // approval) through confirmGrnInTransaction, so all three get identical INBOUND_HANDLING
     // billing + LP traceability. Creating directly as CONFIRMED here used to skip both.
     const wantsConfirm = headerData.status === "CONFIRMED"
+
+    // A GRN may cite the client portal ASN request it fulfils. Check it belongs
+    // to the same client before stamping it: the id arrives in the request body,
+    // and without this an operator with a stale tab -- or a hand-built payload --
+    // could attach one client's receipt to another client's announcement, which
+    // would then show up in that client's portal.
+    let asnRequester: { userId: number; requestNumber: string } | null = null
+    if (headerData.asn_request_id) {
+      const asn = await client.query(
+        `SELECT id, client_id, status, request_number, requested_by
+         FROM client_portal_asn_requests
+         WHERE company_id = $1 AND id = $2`,
+        [session.companyId, headerData.asn_request_id]
+      )
+      if (!asn.rows.length) {
+        throw new Error(`ASN request ${headerData.asn_request_id} not found`)
+      }
+      if (Number(asn.rows[0].client_id) !== Number(headerData.client_id)) {
+        throw new Error("ASN request belongs to a different client")
+      }
+      if (String(asn.rows[0].status) !== "ACCEPTED") {
+        throw new Error(
+          `ASN request ${headerData.asn_request_id} is ${String(asn.rows[0].status).toLowerCase()}; only an accepted request can be received`
+        )
+      }
+      asnRequester = {
+        userId: Number(asn.rows[0].requested_by),
+        requestNumber: String(asn.rows[0].request_number),
+      }
+    }
+
     const created = await createGrnWithLineItems(client, {
       header: { ...headerData, status: "DRAFT" },
       lineItems,
       createdBy: session.userId,
     })
+
+    // Inside the same transaction as the GRN insert, so the portal can never
+    // show a request as received without the receipt that did it existing.
+    if (headerData.asn_request_id) {
+      await markAsnReceived(client, session.companyId, headerData.asn_request_id)
+    }
 
     if (wantsConfirm) {
       await confirmGrnInTransaction(client, {
@@ -651,6 +698,26 @@ export async function POST(request: NextRequest) {
     }
 
     await client.query("COMMIT")
+
+    // The last hop of the portal loop: the client announced it, the warehouse
+    // accepted it, and now it is actually on the shelf. Told after COMMIT and
+    // non-throwing, so a notification failure cannot undo a booked receipt.
+    if (asnRequester) {
+      await notifyUsers({
+        companyId: session.companyId,
+        userIds: [asnRequester.userId],
+        type: "asn.request.received",
+        title: `Shipment ${asnRequester.requestNumber} received`,
+        body: `${created.grn_number} booked in ${headerData.total_quantity} units against your announcement.`,
+        data: {
+          asn_request_id: headerData.asn_request_id,
+          request_number: asnRequester.requestNumber,
+          grn_id: Number(created.id),
+          grn_number: created.grn_number,
+          href: "/portal/asn",
+        },
+      })
+    }
 
     return ok(created, wantsConfirm ? "GRN created and confirmed successfully" : "GRN created successfully")
   } catch (error: unknown) {

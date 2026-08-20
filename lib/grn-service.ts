@@ -28,6 +28,14 @@ export type CreateGrnHeaderPayload = {
   handling_type?: string
   source_channel?: string
   status?: "DRAFT" | "CONFIRMED"
+  /**
+   * The client portal ASN request this receipt fulfils, when staff started from
+   * one. Nothing about the GRN changes because of it -- quantities, billing and
+   * putaway are all driven by what actually arrived -- it only records which
+   * announcement the truck was answering, so the portal can show the client
+   * their request was acted on.
+   */
+  asn_request_id?: number
 }
 
 export type CreateGrnLinePayload = {
@@ -109,10 +117,11 @@ export async function createGrnWithLineItems(
       total_items, total_quantity, total_value, status, created_by,
       gate_in_number, model_number, material_description, receipt_date, manufacturing_date,
       basic_price, invoice_quantity, received_quantity, quantity_difference,
-      damage_quantity, case_count, pallet_count, weight_kg, handling_type, source_channel
+      damage_quantity, case_count, pallet_count, weight_kg, handling_type, source_channel,
+      asn_request_id
     ) VALUES (
       $1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-      $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
+      $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
     )
     RETURNING *`,
     [
@@ -143,6 +152,7 @@ export async function createGrnWithLineItems(
       header.weight_kg ?? null,
       header.handling_type || null,
       header.source_channel || "WEB_MANUAL",
+      header.asn_request_id ?? null,
     ]
   )
 
