@@ -1,12 +1,19 @@
 "use client"
 
-import { useEffect, useState } from "react"
+/**
+ * What the client is holding with us right now.
+ *
+ * Scope, policy and feature grants all come from the shell -- this screen used to
+ * refetch all three and render its own client dropdown, which is how a multi-client
+ * user could end up reading a different client's stock than the one they picked.
+ */
 
-type PortalClient = {
-  id: number
-  client_code: string
-  client_name: string
-}
+import { useCallback, useEffect, useState } from "react"
+
+import { PortalPage } from "@/components/portal/PortalPage"
+import { PortalTable, type PortalColumn } from "@/components/portal/PortalTable"
+import { usePortalScope } from "@/components/portal/portal-scope"
+import { formatQuantity, toNumber } from "@/lib/portal-format"
 
 type InventoryRow = {
   item_id: number
@@ -17,118 +24,108 @@ type InventoryRow = {
   dispatched_units: number
 }
 
+const columns: Array<PortalColumn<InventoryRow>> = [
+  {
+    key: "item_code",
+    label: "Item code",
+    kind: "text",
+    value: (row) => row.item_code,
+    render: (row) => <span className="font-medium text-neutral-900">{row.item_code}</span>,
+    card: "title",
+  },
+  { key: "item_name", label: "Description", kind: "text", value: (row) => row.item_name },
+  { key: "uom", label: "Unit", kind: "text", value: (row) => row.uom },
+  {
+    key: "in_stock_units",
+    label: "In stock",
+    kind: "number",
+    align: "right",
+    value: (row) => row.in_stock_units,
+    render: (row) => (
+      <span className="font-semibold text-neutral-900">{formatQuantity(row.in_stock_units)}</span>
+    ),
+    searchable: false,
+    card: "figure",
+  },
+  {
+    key: "dispatched_units",
+    label: "Dispatched",
+    kind: "number",
+    align: "right",
+    value: (row) => row.dispatched_units,
+    render: (row) => formatQuantity(row.dispatched_units),
+    searchable: false,
+  },
+]
+
 export default function PortalInventoryPage() {
-  const [clients, setClients] = useState<PortalClient[]>([])
-  const [clientId, setClientId] = useState<number | null>(null)
+  const { client, can, loading: scopeLoading } = usePortalScope()
+  const clientId = client?.id ?? null
+
   const [rows, setRows] = useState<InventoryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
-  const [portalEnabled, setPortalEnabled] = useState(true)
-  const [inventoryEnabled, setInventoryEnabled] = useState(true)
 
-  useEffect(() => {
-    void (async () => {
-      setLoading(true)
-      setError("")
-      const policyRes = await fetch("/api/v1/policy", { cache: "no-store" })
-      const policyJson = await policyRes.json()
-      const features = policyJson?.data?.features || {}
-      setPortalEnabled(features.portal !== false)
-      setInventoryEnabled(features.stock !== false)
-
-      const clientsRes = await fetch("/api/portal/clients", { cache: "no-store" })
-      const clientsJson = await clientsRes.json()
-      const loadedClients = (clientsJson?.data || []) as PortalClient[]
-      setClients(loadedClients)
-      const selected = loadedClients[0]?.id ?? null
-      setClientId(selected)
-      setLoading(false)
-    })()
-  }, [])
-
-  useEffect(() => {
-    if (!clientId || !portalEnabled || !inventoryEnabled) return
-    void (async () => {
-      setLoading(true)
-      setError("")
+  const load = useCallback(async () => {
+    if (!clientId) return
+    setLoading(true)
+    setError("")
+    try {
       const res = await fetch(`/api/portal/inventory?client_id=${clientId}`, { cache: "no-store" })
       const json = await res.json()
       if (!res.ok) {
-        setError(json?.error?.message || "Failed to load inventory")
+        setError(json?.error?.message || "Please try again in a moment.")
         setRows([])
       } else {
         setRows((json?.data || []) as InventoryRow[])
       }
+    } catch {
+      setError("Check your connection and try again.")
+      setRows([])
+    } finally {
       setLoading(false)
-    })()
-  }, [clientId, portalEnabled, inventoryEnabled])
+    }
+  }, [clientId])
+
+  useEffect(() => {
+    if (!can.inventory) {
+      setLoading(false)
+      return
+    }
+    void load()
+  }, [can.inventory, load])
+
+  const heldUnits = rows.reduce((total, row) => total + toNumber(row.in_stock_units), 0)
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Portal Inventory</h1>
-        <a href="/portal" className="rounded-md border px-4 py-2 text-sm">
-          Back to Portal
-        </a>
-      </div>
-
-      <div className="mb-4 rounded-lg border p-4">
-        <label className="mb-2 block text-sm font-medium">Client</label>
-        <select
-          className="w-full rounded-md border px-3 py-2"
-          value={clientId ?? ""}
-          onChange={(e) => setClientId(Number(e.target.value))}
-        >
-          {clients.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.client_name} ({client.client_code})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {!portalEnabled || !inventoryEnabled ? (
-        <p className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          Inventory is disabled by tenant policy.
-        </p>
-      ) : null}
-
-      {loading ? <p className="text-sm text-neutral-600">Loading inventory...</p> : null}
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-      {!loading && !error ? (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-neutral-100">
-              <tr>
-                <th className="px-3 py-2 text-left">Item Code</th>
-                <th className="px-3 py-2 text-left">Item Name</th>
-                <th className="px-3 py-2 text-left">UOM</th>
-                <th className="px-3 py-2 text-right">In Stock</th>
-                <th className="px-3 py-2 text-right">Dispatched</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.item_id} className="border-t">
-                  <td className="px-3 py-2">{row.item_code}</td>
-                  <td className="px-3 py-2">{row.item_name}</td>
-                  <td className="px-3 py-2">{row.uom}</td>
-                  <td className="px-3 py-2 text-right">{row.in_stock_units}</td>
-                  <td className="px-3 py-2 text-right">{row.dispatched_units}</td>
-                </tr>
-              ))}
-              {!rows.length ? (
-                <tr>
-                  <td className="px-3 py-4 text-center text-neutral-500" colSpan={5}>
-                    No inventory records found.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-    </main>
+    <PortalPage
+      title="Inventory"
+      description={
+        rows.length && !loading
+          ? `${formatQuantity(heldUnits)} units held across ${rows.length} ${rows.length === 1 ? "item" : "items"}.`
+          : "Everything we are holding for you, by item."
+      }
+      denied={
+        can.inventory
+          ? null
+          : { reason: "Ask your warehouse provider to enable inventory visibility on your portal account." }
+      }
+    >
+      <PortalTable
+        rows={rows}
+        columns={columns}
+        rowKey={(row) => row.item_id}
+        loading={loading || scopeLoading}
+        error={error}
+        onRetry={load}
+        noun={{ singular: "item", plural: "items" }}
+        searchPlaceholder="Search by item code or name"
+        initialSort={{ key: "in_stock_units", dir: "desc" }}
+        empty={{
+          title: "No stock on hand",
+          body: "Items appear here once your first shipment has been received and booked in.",
+        }}
+      />
+    </PortalPage>
   )
 }
