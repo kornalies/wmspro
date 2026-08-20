@@ -5,7 +5,6 @@ import { useMemo, useState } from "react"
 import Link from "next/link"
 import {
   AlertTriangle,
-  ArrowUpDown,
   Download,
   Eye,
   FileText,
@@ -35,7 +34,9 @@ import { Input } from "@/components/ui/input"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
 import { DO_STATUSES, DO_STATUS_LABELS, type DOStatus } from "@/lib/do-status"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 import { DODispatchDialog, type DeliveryOrder } from "@/components/do/DODispatchDialog"
 
 type DOListRow = {
@@ -154,6 +155,7 @@ function exceptionTags(row: DOListRow) {
   return tags
 }
 
+/** Display/CSV text for a cell. Used by the export -- NOT by the sort; see sortCell. */
 function rawCell(row: DOListRow, key: keyof DOListRow | "progress" | "exceptions") {
   if (key === "request_date") return formatDate(row.request_date)
   if (key === "created_at") return formatDateTime(row.created_at)
@@ -161,6 +163,50 @@ function rawCell(row: DOListRow, key: keyof DOListRow | "progress" | "exceptions
   if (key === "exceptions") return exceptionTags(row).map((tag) => EXCEPTION_LABELS[tag]).join("; ") || "OK"
   return row[key]
 }
+
+/**
+ * Sortable value for a cell -- raw, never formatted.
+ *
+ * The comparator used to call rawCell, so created_at reached it as
+ * "18 Aug 2026, 04:30 PM" and sorted alphabetically by day-of-month, and progress
+ * arrived as "85%", which Number() reads as NaN so "9%" outranked "85%". created_at is
+ * this screen's default sort, so the list was mis-ordered before anyone clicked.
+ */
+function sortCell(row: DOListRow, key: keyof DOListRow | "progress" | "exceptions") {
+  if (key === "progress") return fulfillment(row)
+  if (key === "exceptions") return exceptionTags(row).length
+  return row[key]
+}
+
+// Columns the API can order by; these must match DO_SORT_COLUMNS in app/api/do/route.ts.
+// Anything outside this set is sorted in the browser and therefore covers the current
+// page only, which the header states rather than leaving the user to infer.
+const SERVER_SORTABLE = new Set([
+  "do_number",
+  "request_date",
+  "client_name",
+  "warehouse_name",
+  "invoice_no",
+  "created_at",
+  "created_by_name",
+  "total_items",
+  "total_quantity_requested",
+  "total_quantity_dispatched",
+  "status",
+  "progress",
+])
+
+const SORT_KINDS: Partial<Record<string, ValueKind>> = {
+  request_date: "date",
+  created_at: "date",
+  total_items: "number",
+  total_quantity_requested: "number",
+  total_quantity_dispatched: "number",
+  progress: "number",
+  exceptions: "number",
+}
+
+const kindFor = (key: string): ValueKind => SORT_KINDS[key] ?? "text"
 
 export default function DOPage() {
   const [page, setPage] = useState(1)
@@ -199,6 +245,10 @@ export default function DOPage() {
     client_id: clientFilter,
     date_from: dateFrom,
     date_to: dateTo,
+    // Only forwarded for columns the API can order by; for the rest the hook omits it
+    // and the page falls back to a client-side sort of the current page.
+    sort_by: SERVER_SORTABLE.has(String(sortKey)) ? String(sortKey) : undefined,
+    sort_dir: SERVER_SORTABLE.has(String(sortKey)) ? sortDir : undefined,
   })
   const detailsQuery = useDO(selectedId)
   const dispatchMutation = useDispatchDO(selectedId || 0)
@@ -247,21 +297,16 @@ export default function DOPage() {
   const visibleColumns = columns.filter((column) => !hiddenColumns.includes(String(column.key)))
 
   const visibleRows = useMemo(() => {
-    return [...rows]
-      .filter((row) => {
-        if (exceptionFilter === "all") return true
-        const tags = exceptionTags(row)
-        if (exceptionFilter === "needs_action") return tags.length > 0
-        return tags.includes(exceptionFilter)
-      })
-      .sort((a, b) => {
-        const av = rawCell(a, sortKey)
-        const bv = rawCell(b, sortKey)
-        const an = Number(av)
-        const bn = Number(bv)
-        const result = Number.isFinite(an) && Number.isFinite(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""))
-        return sortDir === "asc" ? result : -result
-      })
+    const filtered = rows.filter((row) => {
+      if (exceptionFilter === "all") return true
+      const tags = exceptionTags(row)
+      if (exceptionFilter === "needs_action") return tags.length > 0
+      return tags.includes(exceptionFilter)
+    })
+    // The API has already ordered a server-sortable column across the whole result set;
+    // re-sorting the page here would be redundant and would fight the SQL on ties.
+    if (SERVER_SORTABLE.has(String(sortKey))) return filtered
+    return sortRows(filtered, (row) => sortCell(row, sortKey), kindFor(String(sortKey)), sortDir, (row) => row.id)
   }, [rows, exceptionFilter, sortDir, sortKey])
 
   const selectedRows = visibleRows.filter((row) => selectedIds.includes(row.id))
@@ -295,8 +340,12 @@ export default function DOPage() {
   const dateInvalid = dateFrom > dateTo
 
   const sortBy = (key: keyof DOListRow | "progress" | "exceptions") => {
+    const next = nextSortState({ key: String(sortKey), dir: sortDir }, String(key), kindFor(String(key)))
     setSortKey(key)
-    setSortDir((current) => (sortKey === key && current === "desc" ? "asc" : "desc"))
+    setSortDir(next.dir)
+    // A server-side sort reorders the entire result set, so page 3 of the old order is
+    // meaningless in the new one.
+    setPage(1)
   }
 
   const applySearch = () => {
@@ -598,12 +647,23 @@ export default function DOPage() {
                     <input type="checkbox" checked={visibleRows.length > 0 && visibleRows.every((row) => selectedIds.includes(row.id))} onChange={toggleAll} />
                   </TableHead>
                   {visibleColumns.map((column) => (
-                    <TableHead key={String(column.key)} className={column.numeric ? "text-right" : ""}>
-                      <button type="button" className="inline-flex items-center gap-1 whitespace-nowrap" onClick={() => sortBy(column.key)}>
-                        {column.label}
-                        <ArrowUpDown className="h-3 w-3" />
-                      </button>
-                    </TableHead>
+                    // The old header rendered a static ArrowUpDown on every column, so
+                    // nothing showed which column was active or in which direction --
+                    // part of why sorting read as "not working" even where it worked.
+                    <SortableHead
+                      key={String(column.key)}
+                      label={column.label}
+                      active={sortKey === column.key}
+                      dir={sortDir}
+                      align={column.numeric ? "right" : "left"}
+                      className="whitespace-nowrap"
+                      hint={
+                        SERVER_SORTABLE.has(String(column.key))
+                          ? undefined
+                          : "Sorts the current page only — this column is calculated in the browser."
+                      }
+                      onClick={() => sortBy(column.key)}
+                    />
                   ))}
                   <TableHead className="sticky right-0 bg-slate-50 text-right dark:bg-slate-900">Actions</TableHead>
                 </TableRow>

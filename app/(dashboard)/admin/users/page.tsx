@@ -56,7 +56,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 import { PORTAL_FEATURE_KEYS, PORTAL_FEATURE_LABELS } from "@/lib/portal-features"
 
 type UserRow = {
@@ -97,6 +99,19 @@ type WarehouseOption = {
 
 type StatusFilter = "all" | "admins" | "operations" | "clients" | "unassigned" | "inactive" | "invited" | "not-invited"
 type SortKey = "full_name" | "username" | "email" | "role" | "warehouse_name" | "is_active" | "last_login"
+
+// last_login was compared as a lowercased string, which happens to order ISO stamps
+// correctly but put never-logged-in users FIRST on an ascending sort. As a date it is
+// blank, and blanks sort last in both directions.
+const SORT_KINDS: Record<SortKey, ValueKind> = {
+  full_name: "text",
+  username: "text",
+  email: "text",
+  role: "text",
+  warehouse_name: "text",
+  is_active: "boolean",
+  last_login: "date",
+}
 
 const USERS_PER_PAGE = 12
 
@@ -272,11 +287,7 @@ export default function UsersPage() {
       return matchesSearch && matchesChip && matchesRole && matchesWarehouse && matchesInvite && matchesSecurity
     })
 
-    return [...rows].sort((a, b) => {
-      const left = String(a[sortKey] ?? "").toLowerCase()
-      const right = String(b[sortKey] ?? "").toLowerCase()
-      return sortDir === "asc" ? left.localeCompare(right) : right.localeCompare(left)
-    })
+    return sortRows(rows, (user) => user[sortKey], SORT_KINDS[sortKey], sortDir, (user) => user.id)
   }, [inviteFilter, roleFilter, search, securityFilter, sortDir, sortKey, statusFilter, users, warehouseFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / USERS_PER_PAGE))
@@ -481,12 +492,10 @@ export default function UsersPage() {
   }
 
   const sortBy = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"))
-      return
-    }
-    setSortKey(key)
-    setSortDir("asc")
+    const next = nextSortState({ key: sortKey, dir: sortDir }, key, SORT_KINDS[key])
+    setSortKey(next.key)
+    setSortDir(next.dir)
+    setCurrentPage(1)
   }
 
   return (
@@ -966,15 +975,6 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   )
 }
 
-function SortableHead({ label, active, dir, onClick }: { label: string; active: boolean; dir: "asc" | "desc"; onClick: () => void }) {
-  return (
-    <TableHead>
-      <button type="button" className="font-semibold hover:text-blue-700" onClick={onClick}>
-        {label}{active ? (dir === "asc" ? " ↑" : " ↓") : ""}
-      </button>
-    </TableHead>
-  )
-}
 
 function RoleBadge({ role }: { role: string }) {
   return (

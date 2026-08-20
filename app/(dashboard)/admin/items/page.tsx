@@ -49,7 +49,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 
 type ItemRow = {
   id: number
@@ -65,6 +67,20 @@ type ItemRow = {
 
 type StatusFilter = "all" | "active" | "inactive" | "missing-hsn" | "zero-mrp" | "no-min-alert" | "incomplete"
 type SortKey = "item_code" | "item_name" | "hsn_code" | "uom" | "standard_mrp" | "min_stock_alert" | "is_active"
+
+// standard_mrp is numeric(10,2), so it reaches the browser as a STRING and any
+// `typeof x === "number"` test on it is false -- which is how MRP came to sort
+// alphabetically ("1200.00" above "999.00"). min_stock_alert is a plain integer and
+// does arrive as a number, which is why only one of these two columns looked broken.
+const SORT_KINDS: Record<SortKey, ValueKind> = {
+  item_code: "text",
+  item_name: "text",
+  hsn_code: "text",
+  uom: "text",
+  standard_mrp: "number",
+  min_stock_alert: "number",
+  is_active: "boolean",
+}
 
 const ITEMS_PER_PAGE = 12
 
@@ -205,14 +221,7 @@ export default function ItemsPage() {
       return matchesSearch && matchesStatus && matchesUom && matchesHsn && matchesMrp
     })
 
-    return [...rows].sort((a, b) => {
-      const leftRaw = a[sortKey]
-      const rightRaw = b[sortKey]
-      const left = typeof leftRaw === "number" ? leftRaw : String(leftRaw ?? "").toLowerCase()
-      const right = typeof rightRaw === "number" ? rightRaw : String(rightRaw ?? "").toLowerCase()
-      const result = typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right))
-      return sortDir === "asc" ? result : -result
-    })
+    return sortRows(rows, (item) => item[sortKey], SORT_KINDS[sortKey], sortDir, (item) => item.id)
   }, [hsnFilter, items, maxMrp, minMrp, search, sortDir, sortKey, statusFilter, uomFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
@@ -271,12 +280,12 @@ export default function ItemsPage() {
   }
 
   const sortBy = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"))
-      return
-    }
-    setSortKey(key)
-    setSortDir("asc")
+    const next = nextSortState({ key: sortKey, dir: sortDir }, key, SORT_KINDS[key])
+    setSortKey(next.key)
+    setSortDir(next.dir)
+    // Re-sorting reorders the whole result set, so the old page number points at a
+    // different slice of different rows.
+    setCurrentPage(1)
   }
 
   const clearFilters = () => {
@@ -647,16 +656,6 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
         </SelectContent>
       </Select>
     </div>
-  )
-}
-
-function SortableHead({ label, active, dir, onClick }: { label: string; active: boolean; dir: "asc" | "desc"; onClick: () => void }) {
-  return (
-    <TableHead>
-      <button type="button" className="font-semibold hover:text-blue-700" onClick={onClick}>
-        {label}{active ? (dir === "asc" ? " ↑" : " ↓") : ""}
-      </button>
-    </TableHead>
   )
 }
 

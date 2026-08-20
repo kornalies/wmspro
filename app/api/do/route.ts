@@ -4,11 +4,36 @@ import { getSession, requirePermission } from "@/lib/auth"
 import { getClient, query, setTenantContext } from "@/lib/db"
 import { doHeaderSchema, doLineItemSchema } from "@/lib/validations"
 import { fail, ok, paginated } from "@/lib/api-response"
+import { buildOrderBy, type SortColumnMap } from "@/lib/api-sort"
 import { getDOStatusErrorMessage, normalizeDOStatus } from "@/lib/do-status"
 import { getEffectivePolicy, resolvePolicyActorType } from "@/lib/policy/effective"
 import { guardToFailResponse, requireScope } from "@/lib/policy/guards"
 import { assertProductEnabled, guardProductError } from "@/lib/product-access"
 import { freeStockPredicate } from "@/lib/allocation"
+
+// Whitelist of sortable columns. Keys match the DO list's column keys; the values are
+// SQL we wrote, so nothing from the query string is ever concatenated into the
+// statement. `progress` is derived here rather than in the browser precisely so that
+// sorting by it can span the whole result set instead of one page.
+//
+// The list's `exceptions` column is deliberately absent: it is a client-side heuristic
+// over today's date and status, so it stays a page-local sort and the header says so.
+const DO_SORT_COLUMNS: SortColumnMap = {
+  do_number: "dh.do_number",
+  request_date: "dh.request_date",
+  client_name: "c.client_name",
+  warehouse_name: "w.warehouse_name",
+  invoice_no: "dh.invoice_no",
+  created_at: "dh.created_at",
+  created_by_name: "u.full_name",
+  total_items: "dh.total_items",
+  total_quantity_requested: "dh.total_quantity_requested",
+  total_quantity_dispatched: "dh.total_quantity_dispatched",
+  status: "dh.status",
+  // NULLIF guards the zero-request case: without it a DO with nothing requested divides
+  // by zero rather than sorting as "no progress".
+  progress: "COALESCE(dh.total_quantity_dispatched, 0)::numeric / NULLIF(dh.total_quantity_requested, 0)",
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,6 +51,13 @@ export async function GET(request: NextRequest) {
     const clientParam = searchParams.get("client_id")
     const dateFrom = searchParams.get("date_from")
     const dateTo = searchParams.get("date_to")
+    const orderByClause = buildOrderBy(
+      searchParams.get("sort_by"),
+      searchParams.get("sort_dir"),
+      DO_SORT_COLUMNS,
+      { key: "created_at", direction: "DESC" },
+      "dh.id"
+    )
     const requestedWarehouseId =
       warehouseParam && warehouseParam !== "all" ? Number(warehouseParam) : 0
     const requestedClientId =
@@ -132,7 +164,7 @@ export async function GET(request: NextRequest) {
       JOIN warehouses w ON w.id = dh.warehouse_id AND w.company_id = dh.company_id
       LEFT JOIN users u ON u.id = dh.created_by AND u.company_id = dh.company_id
       ${whereClause}
-      ORDER BY dh.created_at DESC
+      ${orderByClause}
       LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]
     )

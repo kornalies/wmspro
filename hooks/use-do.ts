@@ -16,6 +16,11 @@ type DOQueryParams = {
   client_id?: string
   date_from?: string
   date_to?: string
+  // Sorting is server-side: this list is paginated, so a client-side sort would only
+  // ever reorder the rows already on screen. These land in the query key, so changing
+  // a sort refetches rather than reshuffling the current page.
+  sort_by?: string
+  sort_dir?: "asc" | "desc"
 }
 
 type DORef = number | string
@@ -71,6 +76,8 @@ function buildQuery(params: DOQueryParams) {
   if (params.client_id && params.client_id !== "all") sp.set("client_id", params.client_id)
   if (params.date_from) sp.set("date_from", params.date_from)
   if (params.date_to) sp.set("date_to", params.date_to)
+  if (params.sort_by) sp.set("sort_by", params.sort_by)
+  if (params.sort_dir) sp.set("sort_dir", params.sort_dir)
   return sp.toString()
 }
 

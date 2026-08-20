@@ -45,6 +45,7 @@
     "test:stock-docs": "node scripts/db/run-with-env.mjs tests/stock-transfer-adjustment.mjs",
     "test:receivables": "node scripts/db/run-with-env.mjs tests/receivables.mjs",
     "test:billing-cycle": "node tests/billing-cycle.mjs",
+    "test:table-sort": "node tests/table-sort.mjs",
     "test:migration-targets": "node tests/migration-targets.mjs",
     "test:billing-cron": "node scripts/db/run-with-env.mjs tests/billing-cron.mjs",
     "test:portal": "node scripts/db/run-with-env.mjs tests/portal.mjs",

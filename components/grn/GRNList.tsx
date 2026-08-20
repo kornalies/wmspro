@@ -4,7 +4,6 @@ import Link from "next/link"
 import { useMemo, useState } from "react"
 import {
   AlertTriangle,
-  ArrowUpDown,
   CheckCircle2,
   Download,
   Eye,
@@ -31,7 +30,9 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 
 type GrnRow = {
   id: number
@@ -122,6 +123,35 @@ function hasVariance(row: GrnRow) {
   return damaged > 0 || (invoice > 0 && received > 0 && invoice !== received)
 }
 
+// Columns the API can order by; must match GRN_SORT_COLUMNS in app/api/grn/route.ts.
+// This list is server-paginated, so a client-side sort of anything in this set would
+// only reorder the rows already on screen -- which is what it did before.
+const SERVER_SORTABLE = new Set([
+  "grn_number",
+  "grn_date",
+  "client_name",
+  "warehouse_name",
+  "invoice_number",
+  "supplier_name",
+  "created_at",
+  "created_by_name",
+  "total_items",
+  "total_quantity",
+  "status",
+])
+
+const SORT_KINDS: Partial<Record<string, ValueKind>> = {
+  grn_date: "date",
+  created_at: "date",
+  total_items: "number",
+  total_quantity: "number",
+  // Derived in the browser from invoice vs received vs damaged, so it cannot go into
+  // the SQL whitelist and stays a page-local sort.
+  variance: "boolean",
+}
+
+const kindFor = (key: string): ValueKind => SORT_KINDS[key] ?? "text"
+
 export function GRNList() {
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(25)
@@ -157,6 +187,8 @@ export function GRNList() {
     client_id: clientFilter,
     date_from: dateFrom,
     date_to: dateTo,
+    sort_by: SERVER_SORTABLE.has(String(sortKey)) ? String(sortKey) : undefined,
+    sort_dir: SERVER_SORTABLE.has(String(sortKey)) ? sortDir : undefined,
   })
   const warehousesQuery = useAdminResource("warehouses")
   const clientsQuery = useAdminResource("clients")
@@ -172,17 +204,18 @@ export function GRNList() {
 
   const visibleRows = useMemo(() => {
     const supplierTerm = supplierSearch.trim().toLowerCase()
-    return [...rows]
+    const filtered = rows
       .filter((row) => sourceFilter === "all" || sourceLabel(row.source_channel) === sourceFilter)
       .filter((row) => !supplierTerm || `${row.supplier_name ?? ""} ${row.supplier_gst ?? ""}`.toLowerCase().includes(supplierTerm))
-      .sort((a, b) => {
-        const av = sortKey === "variance" ? Number(hasVariance(a)) : a[sortKey]
-        const bv = sortKey === "variance" ? Number(hasVariance(b)) : b[sortKey]
-        const an = Number(av)
-        const bn = Number(bv)
-        const result = Number.isFinite(an) && Number.isFinite(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""))
-        return sortDir === "asc" ? result : -result
-      })
+    // Already ordered by the API across the whole result set.
+    if (SERVER_SORTABLE.has(String(sortKey))) return filtered
+    return sortRows(
+      filtered,
+      (row) => (sortKey === "variance" ? hasVariance(row) : row[sortKey]),
+      kindFor(String(sortKey)),
+      sortDir,
+      (row) => row.id
+    )
   }, [rows, sourceFilter, supplierSearch, sortKey, sortDir])
 
   const selectedRows = visibleRows.filter((row) => selectedIds.includes(row.id))
@@ -227,8 +260,10 @@ export function GRNList() {
   }, [rows])
 
   const sortBy = (key: keyof GrnRow | "variance") => {
+    const next = nextSortState({ key: String(sortKey), dir: sortDir }, String(key), kindFor(String(key)))
     setSortKey(key)
-    setSortDir((current) => (sortKey === key && current === "desc" ? "asc" : "desc"))
+    setSortDir(next.dir)
+    setPage(1)
   }
 
   const applySearch = () => {
@@ -469,14 +504,27 @@ export function GRNList() {
             <TableHeader>
               <TableRow className="bg-slate-50">
                 <TableHead className="w-10"><input type="checkbox" checked={visibleRows.length > 0 && visibleRows.every((row) => selectedIds.includes(row.id))} onChange={toggleAll} /></TableHead>
-                {visibleColumns.map((column) => (
-                  <TableHead key={String(column.key)} className={column.numeric ? "text-right" : ""}>
-                    <button type="button" className="inline-flex items-center gap-1" onClick={() => column.key !== "source" && sortBy(column.key === "variance" ? "variance" : column.key as keyof GrnRow)}>
-                      {column.label}
-                      {column.key !== "source" ? <ArrowUpDown className="h-3 w-3" /> : null}
-                    </button>
-                  </TableHead>
-                ))}
+                {visibleColumns.map((column) =>
+                  // Source is genuinely not sortable, so it stays a plain header rather
+                  // than a button that looks clickable and does nothing.
+                  column.key === "source" ? (
+                    <TableHead key="source">{column.label}</TableHead>
+                  ) : (
+                    <SortableHead
+                      key={String(column.key)}
+                      label={column.label}
+                      active={sortKey === column.key}
+                      dir={sortDir}
+                      align={column.numeric ? "right" : "left"}
+                      hint={
+                        SERVER_SORTABLE.has(String(column.key))
+                          ? undefined
+                          : "Sorts the current page only — this column is calculated in the browser."
+                      }
+                      onClick={() => sortBy(column.key === "variance" ? "variance" : (column.key as keyof GrnRow))}
+                    />
+                  )
+                )}
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>

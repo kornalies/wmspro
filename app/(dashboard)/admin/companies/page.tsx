@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react"
 import {
   AlertTriangle,
-  ArrowUpDown,
   Building2,
   CheckCircle2,
   Download,
@@ -27,7 +26,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
+import { SortableHead } from "@/components/ui/sortable-head"
 import { TypeaheadInput } from "@/components/ui/typeahead-input"
+import { nextSortState, sortRows, type ValueKind } from "@/lib/table-sort"
 import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -211,28 +212,32 @@ function storagePct(row: CompanyRow) {
   return Math.min(100, Math.round((toNumber(row.storage_used_gb) / storageQuota(row)) * 100))
 }
 
-function SortableHead({
-  label,
-  active,
-  dir,
-  onClick,
-  className,
-}: {
-  label: string
-  active: boolean
-  dir: "asc" | "desc"
-  onClick: () => void
-  className?: string
-}) {
-  return (
-    <TableHead className={className}>
-      <button type="button" className="inline-flex items-center gap-1 font-medium" onClick={onClick}>
-        {label}
-        <ArrowUpDown className={`h-3.5 w-3.5 ${active ? "text-blue-600" : "text-gray-400"}`} />
-        {active && <span className="sr-only">sorted {dir}</span>}
-      </button>
-    </TableHead>
-  )
+// This screen was already sorting correctly -- it ran every key through toNumber()
+// rather than trusting `typeof`. It moves to the shared comparator for consistency and
+// to pick up the blanks-last and tiebreak rules; the column semantics are unchanged.
+const SORT_KINDS: Record<SortKey, ValueKind> = {
+  company_name: "text",
+  subscription_plan: "text",
+  active_users: "number",
+  storage_used_gb: "number",
+  billing_status: "text",
+  users_count: "number",
+  lifecycle: "text",
+  last_activity_at: "date",
+  updated_at: "date",
+}
+
+// `lifecycle` is derived rather than a column, so accessors are explicit here.
+const SORT_ACCESSORS: Record<SortKey, (row: CompanyRow) => unknown> = {
+  company_name: (row) => row.company_name,
+  subscription_plan: (row) => row.subscription_plan,
+  active_users: (row) => row.active_users,
+  storage_used_gb: (row) => row.storage_used_gb,
+  billing_status: (row) => row.billing_status,
+  users_count: (row) => row.users_count,
+  lifecycle: (row) => lifecycleStatus(row),
+  last_activity_at: (row) => row.last_activity_at,
+  updated_at: (row) => row.updated_at,
 }
 
 export default function CompaniesPage() {
@@ -325,29 +330,10 @@ export default function CompaniesPage() {
     })
   }, [billingFilter, companies, planFilter, productFilter, search, statusFilter])
 
-  const sorted = useMemo(() => {
-    const rows = [...filtered]
-    rows.sort((a, b) => {
-      const value = (row: CompanyRow) => {
-        if (sortKey === "active_users") return toNumber(row.active_users)
-        if (sortKey === "storage_used_gb") return toNumber(row.storage_used_gb)
-        if (sortKey === "users_count") return toNumber(row.users_count)
-        if (sortKey === "lifecycle") return lifecycleStatus(row)
-        if (sortKey === "last_activity_at") return row.last_activity_at || ""
-        if (sortKey === "updated_at") return row.updated_at || ""
-        return String(row[sortKey] || "")
-      }
-      const left = value(a)
-      const right = value(b)
-      if (typeof left === "number" && typeof right === "number") {
-        return sortDir === "asc" ? left - right : right - left
-      }
-      return sortDir === "asc"
-        ? String(left).localeCompare(String(right))
-        : String(right).localeCompare(String(left))
-    })
-    return rows
-  }, [filtered, sortDir, sortKey])
+  const sorted = useMemo(
+    () => sortRows(filtered, SORT_ACCESSORS[sortKey], SORT_KINDS[sortKey], sortDir, (row) => row.id),
+    [filtered, sortDir, sortKey]
+  )
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / COMPANIES_PER_PAGE))
   const page = Math.min(currentPage, totalPages)
@@ -356,12 +342,10 @@ export default function CompaniesPage() {
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id))
 
   const sortBy = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"))
-      return
-    }
-    setSortKey(key)
-    setSortDir("asc")
+    const next = nextSortState({ key: sortKey, dir: sortDir }, key, SORT_KINDS[key])
+    setSortKey(next.key)
+    setSortDir(next.dir)
+    setCurrentPage(1)
   }
 
   const openCreate = () => {

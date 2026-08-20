@@ -38,8 +38,13 @@ export interface Item {
   category_name?: string
   hsn_code?: string
   uom: string
-  standard_mrp?: number
-  min_stock_alert?: number
+  // numeric(10,2): node-postgres returns `numeric` as a STRING to preserve precision,
+  // so this is never reliably a number over the wire. Declaring it `number` is what let
+  // the items list gate its comparator on `typeof mrp === "number"` and silently sort
+  // MRP as text. Coerce before comparing or summing.
+  standard_mrp?: number | string | null
+  // integer, so this one really does arrive as a number.
+  min_stock_alert?: number | null
   is_active: boolean
 }
 
