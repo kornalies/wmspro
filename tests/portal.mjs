@@ -75,6 +75,18 @@ async function api(path, { token, method = "GET", body } = {}) {
  * A dedicated role is created rather than extending the shared CLIENT role:
  * granting a permission to CLIENT would change what every client of every tenant
  * on this database may do, which is not a test's business.
+ *
+ * The permission ROWS are upserted too, not just looked up, and that is not
+ * belt-and-braces. Migration 030 inserts them -- but CI does not run it: it
+ * restores db/baseline/schema.sql and stamps migrations 001-068 as already
+ * applied, so only a PR's new migrations execute. The baseline carries the
+ * SCHEMA of rbac_permissions and none of its ROWS, so on CI that table is empty
+ * however many times 030 "ran".
+ *
+ * A lookup against an empty table quietly matches nothing, producing a role with
+ * no permissions and a 403 indistinguishable from a real authorisation failure.
+ * That is exactly how this passed locally and failed in CI. Hence the assertion
+ * below: the linkage is checked rather than assumed.
  */
 async function grantRbacPermissions(db, userId, permissionKeys) {
   const roleCode = `PORTAL_TEST_${SUFFIX}`
@@ -88,10 +100,25 @@ async function grantRbacPermissions(db, userId, permissionKeys) {
   const roleId = Number(role.rows[0].id)
 
   await db.query(
+    `INSERT INTO rbac_permissions (permission_key, permission_name, is_active)
+     SELECT x.key, x.key, true FROM UNNEST($1::text[]) AS x(key)
+     ON CONFLICT (permission_key) DO UPDATE SET is_active = true`,
+    [permissionKeys]
+  )
+
+  const linked = await db.query(
     `INSERT INTO rbac_role_permissions (role_id, permission_id)
      SELECT $1, p.id FROM rbac_permissions p WHERE p.permission_key = ANY($2::text[])
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     RETURNING permission_id`,
     [roleId, permissionKeys]
+  )
+  // Assert the link rather than trusting it: this is the step whose silent
+  // no-op produced the misleading 403.
+  check(
+    "the test role received every permission it asked for",
+    linked.rows.length === permissionKeys.length,
+    `linked=${linked.rows.length} of ${permissionKeys.length}`
   )
   await db.query(
     `INSERT INTO rbac_user_roles (user_id, role_id, is_primary)
