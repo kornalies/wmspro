@@ -31,6 +31,7 @@ const USER_GRANTED = `portal_grant_${SUFFIX}`
 const USER_UNGRANTED = `portal_nogrant_${SUFFIX}`
 const USER_TENANT_B = `portal_demo_${SUFFIX}`
 const USER_INVITEE = `portal_invitee_${SUFFIX}`
+const USER_DISPUTER = `portal_disputer_${SUFFIX}`
 const INVITE_TOKEN = `tok-${SUFFIX}-${"a".repeat(40)}`
 
 let failures = 0
@@ -63,6 +64,44 @@ async function api(path, { token, method = "GET", body } = {}) {
  * feature check, so an admin would pass this suite no matter what the grants
  * table said.
  */
+/**
+ * Give one fixture user real RBAC permissions.
+ *
+ * The portal's write routes need BOTH a portal feature grant and an RBAC
+ * permission (see app/api/portal/disputes/route.ts). Feature grants live in
+ * portal_user_permissions; RBAC lives in rbac_user_roles -> rbac_role_permissions,
+ * and the two are entirely separate stores.
+ *
+ * A dedicated role is created rather than extending the shared CLIENT role:
+ * granting a permission to CLIENT would change what every client of every tenant
+ * on this database may do, which is not a test's business.
+ */
+async function grantRbacPermissions(db, userId, permissionKeys) {
+  const roleCode = `PORTAL_TEST_${SUFFIX}`
+  const role = await db.query(
+    `INSERT INTO rbac_roles (role_code, role_name, is_active)
+     VALUES ($1, 'Portal test role', true)
+     ON CONFLICT (role_code) DO UPDATE SET is_active = true
+     RETURNING id`,
+    [roleCode]
+  )
+  const roleId = Number(role.rows[0].id)
+
+  await db.query(
+    `INSERT INTO rbac_role_permissions (role_id, permission_id)
+     SELECT $1, p.id FROM rbac_permissions p WHERE p.permission_key = ANY($2::text[])
+     ON CONFLICT DO NOTHING`,
+    [roleId, permissionKeys]
+  )
+  await db.query(
+    `INSERT INTO rbac_user_roles (user_id, role_id, is_primary)
+     VALUES ($1, $2, false)
+     ON CONFLICT DO NOTHING`,
+    [userId, roleId]
+  )
+  return roleId
+}
+
 async function seedPortalUser(db, { companyId, username, clientId, features }) {
   // Session scope, not transaction scope: withDb hands out a bare connection in
   // autocommit, where a transaction-local setting is discarded the instant the
@@ -155,6 +194,27 @@ async function setupFixtures(fixtures) {
       features: ["portal.inventory.view"],
     })
 
+    // Holds the full dispute set, so the conversation can be exercised end to
+    // end rather than only at its gates.
+    const disputerId = await seedPortalUser(db, {
+      companyId: companyA,
+      username: USER_DISPUTER,
+      clientId: clientA,
+      features: [
+        "portal.billing.view",
+        "portal.dispute.view",
+        "portal.dispute.create",
+        "portal.dispute.manage",
+      ],
+    })
+
+    await grantRbacPermissions(db, disputerId, [
+      "billing.view",
+      "portal.billing.view",
+      "portal.dispute.create",
+      "portal.dispute.manage",
+    ])
+
     const inviteeId = await seedPortalUser(db, {
       companyId: companyA,
       username: USER_INVITEE,
@@ -163,6 +223,42 @@ async function setupFixtures(fixtures) {
     })
 
     await db.query("SELECT set_config('app.company_id', $1, false)", [String(companyA)])
+
+    // An invoice of tenant A's own, so the dispute conversation has something to
+    // hang off. Reused if one already exists: invoice_header carries a unique
+    // constraint on (company, client, period), so a fresh insert on every run
+    // collides with whatever the previous run or another fixture left behind.
+    //
+    // Looked up FIRST and seeded only as a fallback, then asserted rather than
+    // skipped -- a fixture lookup that comes back empty turns the conversation
+    // test into a SKIP, and a skip reads exactly like a pass in a CI log.
+    const existingInvoice = await db.query(
+      `SELECT id FROM invoice_header
+       WHERE company_id = $1 AND client_id = $2 AND COALESCE(status, '') <> 'VOID'
+       ORDER BY id DESC LIMIT 1`,
+      [companyA, clientA]
+    )
+    let invoiceId = Number(existingInvoice.rows[0]?.id || 0)
+    if (!invoiceId) {
+      // A period well clear of the current billing cycle, and deliberately in
+      // the PAST -- fixtures parked in the far future outlive the test that made
+      // them and turn up in real reports.
+      const seeded = await db.query(
+        `INSERT INTO invoice_header (
+           company_id, invoice_number, client_id, period_from, period_to,
+           invoice_date, due_date, status, grand_total, paid_amount, balance_amount
+         ) VALUES (
+           $1, $2, $3,
+           CURRENT_DATE - INTERVAL '400 days', CURRENT_DATE - INTERVAL '370 days',
+           CURRENT_DATE - INTERVAL '370 days', CURRENT_DATE - INTERVAL '355 days',
+           'SENT', 1000, 0, 1000
+         )
+         RETURNING id`,
+        [companyA, `INV-PORTALTEST-${SUFFIX}`, clientA]
+      )
+      invoiceId = Number(seeded.rows[0]?.id || 0)
+    }
+
     await db.query(
       `INSERT INTO portal_user_invites (company_id, user_id, invite_token, status, expires_at, invited_by)
        VALUES ($1, $2, $3, 'PENDING', NOW() + INTERVAL '2 hours', $2)
@@ -171,7 +267,18 @@ async function setupFixtures(fixtures) {
       [companyA, inviteeId, INVITE_TOKEN]
     )
 
-    return { companyA, companyB, clientA, clientB, grantedId, ungrantedId, tenantBId, inviteeId }
+    return {
+      companyA,
+      companyB,
+      clientA,
+      clientB,
+      grantedId,
+      ungrantedId,
+      tenantBId,
+      inviteeId,
+      disputerId,
+      invoiceId,
+    }
   })
 }
 
@@ -244,6 +351,148 @@ async function testClientScoping(ids, fixtures, grantedToken) {
     "tenant B portal user cannot read tenant A's client",
     reachAcross.status === 403,
     `status=${reachAcross.status}`
+  )
+}
+
+/**
+ * The routes added for order detail, the finance documents and the dispute
+ * thread. Each one takes an id in its path, which is a new way to name a record
+ * the caller may not own -- the feature grant only proves they may read THIS
+ * client, never that the record belongs to it.
+ */
+async function testDetailRouteScoping(ids, fixtures, grantedToken) {
+  const ungrantedToken = await login(fixtures.tenantA.code, USER_UNGRANTED, PORTAL_PASSWORD)
+
+  // The granted user holds portal.inventory.view and nothing else, so every one
+  // of these must refuse on the feature gate before ownership is even reached.
+  for (const [path, label] of [
+    [`/portal/orders/1?client_id=${ids.clientA}`, "order detail"],
+    [`/portal/documents/commercial-invoice/1?client_id=${ids.clientA}`, "invoice document"],
+    [`/portal/documents/client-statement/${ids.clientA}?client_id=${ids.clientA}`, "statement"],
+    [`/portal/disputes/1?client_id=${ids.clientA}`, "dispute thread"],
+  ]) {
+    const res = await api(path, { token: grantedToken })
+    check(`${label} is refused without its feature grant`, res.status === 403, `status=${res.status}`)
+    const bare = await api(path, { token: ungrantedToken })
+    check(`${label} is refused for a user with no grants`, bare.status === 403, `status=${bare.status}`)
+  }
+
+  // Naming another tenant's client must fail on the client gate, whatever the
+  // record id says.
+  for (const [path, label] of [
+    [`/portal/orders/1?client_id=${ids.clientB}`, "order detail"],
+    [`/portal/documents/commercial-invoice/1?client_id=${ids.clientB}`, "invoice document"],
+    [`/portal/disputes/1?client_id=${ids.clientB}`, "dispute thread"],
+  ]) {
+    const res = await api(path, { token: grantedToken })
+    check(`${label} refuses another tenant's client id`, res.status === 403, `status=${res.status}`)
+  }
+
+  // A statement is keyed on the client itself, so its subject must BE the client
+  // in scope -- otherwise the path id would choose whose statement to print.
+  const foreignStatement = await api(
+    `/portal/documents/client-statement/${ids.clientB}?client_id=${ids.clientA}`,
+    { token: grantedToken }
+  )
+  check(
+    "a statement cannot be printed for a client other than the one in scope",
+    foreignStatement.status === 403,
+    `status=${foreignStatement.status}`
+  )
+
+  // The operating paperwork is not the client's to read, whatever they hold.
+  const pickList = await api(`/portal/documents/pick-list/1?client_id=${ids.clientA}`, {
+    token: grantedToken,
+  })
+  check(
+    "warehouse-internal document types are not served by the portal at all",
+    pickList.status === 400,
+    `status=${pickList.status}`
+  )
+}
+
+/**
+ * The dispute conversation, end to end.
+ *
+ * This exists because the write half was broken from the day it shipped and
+ * nothing noticed. The UPDATE bound $1 both to the varchar `status` column and
+ * against untyped string literals in an IN list, so Postgres refused the whole
+ * statement with "inconsistent types deduced for parameter $1" -- every comment
+ * and every status change returned a 400, and portal_invoice_dispute_events was
+ * empty in every environment.
+ *
+ * A gate-only test would not have caught it: all the 403s were correct. The
+ * assertion that matters is that a reply SURVIVES, so this posts one and reads
+ * it back.
+ */
+async function testDisputeConversation(ids, fixtures) {
+  const token = await login(fixtures.tenantA.code, USER_DISPUTER, PORTAL_PASSWORD)
+
+  // The seeded invoice, not "whatever the billing list happens to return first".
+  check("the seeded invoice exists to dispute", ids.invoiceId > 0, `invoiceId=${ids.invoiceId}`)
+  if (!ids.invoiceId) return
+
+  const created = await api("/portal/disputes", {
+    token,
+    method: "POST",
+    body: {
+      client_id: ids.clientA,
+      invoice_id: ids.invoiceId,
+      dispute_reason: "Storage was billed for 31 days but the stock left on the 12th.",
+      category: "BILLING_AMOUNT",
+      priority: "MEDIUM",
+    },
+  })
+  check("a dispute can be raised", created.status === 200, `status=${created.status}`)
+  const disputeId = created.json?.data?.id
+  if (!disputeId) {
+    check("dispute id returned", false, JSON.stringify(created.json))
+    return
+  }
+
+  const commented = await api(`/portal/disputes/${disputeId}`, {
+    token,
+    method: "PUT",
+    body: { client_id: ids.clientA, comment: "Adding the delivery note as evidence." },
+  })
+  check("a comment on a dispute is accepted", commented.status === 200, `status=${commented.status}`)
+
+  const advanced = await api(`/portal/disputes/${disputeId}`, {
+    token,
+    method: "PUT",
+    body: {
+      client_id: ids.clientA,
+      status: "UNDER_REVIEW",
+      comment: "Passed to the billing team for recalculation.",
+    },
+  })
+  check("a status change on a dispute is accepted", advanced.status === 200, `status=${advanced.status}`)
+
+  const thread = await api(`/portal/disputes/${disputeId}?client_id=${ids.clientA}`, { token })
+  const events = thread.json?.data?.events || []
+  check("the thread reads back", thread.status === 200, `status=${thread.status}`)
+  check(
+    "every event written is readable -- created, comment and status change",
+    events.length === 3 &&
+      events.map((event) => event.event_type).join(",") === "CREATED,COMMENT,STATUS_CHANGE",
+    `events=${JSON.stringify(events.map((event) => event.event_type))}`
+  )
+  check(
+    "the dispute carries the new status",
+    thread.json?.data?.status === "UNDER_REVIEW",
+    `status=${thread.json?.data?.status}`
+  )
+  check(
+    "the client's own messages are attributed to them",
+    events.every((event) => event.author === "you"),
+    `authors=${JSON.stringify(events.map((event) => event.author))}`
+  )
+
+  const foreign = await api(`/portal/disputes/${disputeId}?client_id=${ids.clientB}`, { token })
+  check(
+    "the thread refuses another tenant's client id",
+    foreign.status === 403,
+    `status=${foreign.status}`
   )
 }
 
@@ -449,6 +698,8 @@ async function run() {
   try {
     const grantedToken = await testFeatureGrants(ids, fixtures)
     await testClientScoping(ids, fixtures, grantedToken)
+  await testDetailRouteScoping(ids, fixtures, grantedToken)
+  await testDisputeConversation(ids, fixtures)
     await testRowLevelSecurity(ids)
     await testSignInRouting(fixtures)
     await testInviteFlow(fixtures)

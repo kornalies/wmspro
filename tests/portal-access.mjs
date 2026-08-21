@@ -200,5 +200,28 @@ check(
   "and are closed outright when billing itself is closed"
 )
 
+
+// -------------------------------------------------------------- portal documents
+//
+// The two finance documents are served by their own portal route rather than by
+// /api/documents, which gates on the staff `finance.view` permission. What the
+// portal exposes is therefore a decision in its own right, and this is the list.
+
+check(
+  "billing documents follow the billing section, not a separate grant",
+  resolvePortalAccess({ features: {}, permissions: ["billing.view"], grants: FULL_GRANTS }).can
+    .billing === true &&
+    resolvePortalAccess({ features: {}, permissions: [], grants: FULL_GRANTS }).can.billing === false,
+  "so a client who cannot see an invoice cannot print one either"
+)
+check(
+  "billing disabled for the tenant closes the documents with it",
+  resolvePortalAccess({
+    features: { billing: false },
+    permissions: ["billing.view"],
+    grants: FULL_GRANTS,
+  }).can.billing === false
+)
+
 console.log(failures ? `\n${failures} check(s) failed.` : "\nAll portal access checks passed.")
 process.exit(failures ? 1 : 0)
