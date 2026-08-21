@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 
 import { PortalDrawer } from "@/components/portal/PortalDrawer"
 import { PortalPage } from "@/components/portal/PortalPage"
@@ -56,6 +57,7 @@ function dueCopy(row: BillingRow) {
 export default function PortalBillingPage() {
   const { client, can, canActOnInvoice, loading: scopeLoading } = usePortalScope()
   const clientId = client?.id ?? null
+  const clientQuery = client ? `?client=${encodeURIComponent(client.client_code)}` : ""
 
   const [rows, setRows] = useState<BillingRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -197,7 +199,16 @@ export default function PortalBillingPage() {
         label: "Invoice",
         kind: "text",
         value: (row) => row.invoice_number,
-        render: (row) => <span className="font-medium text-neutral-900">{row.invoice_number}</span>,
+        // The number is the link: a client looking for the paper looks for the
+        // invoice number, not for a separate "download" column.
+        render: (row) => (
+          <Link
+            href={`/portal/documents/commercial-invoice/${row.id}${clientQuery}`}
+            className="font-medium text-blue-800 underline-offset-2 hover:underline"
+          >
+            {row.invoice_number}
+          </Link>
+        ),
         card: "title",
       },
       {
@@ -310,7 +321,7 @@ export default function PortalBillingPage() {
           ]
         : []),
     ],
-    [canActOnInvoice]
+    [canActOnInvoice, clientQuery]
   )
 
   const filtered = outstandingOnly === "open" ? rows.filter((row) => toNumber(row.balance_amount) > 0) : rows
@@ -332,6 +343,18 @@ export default function PortalBillingPage() {
         can.billing
           ? null
           : { reason: "Ask your warehouse provider to enable billing visibility on your portal account." }
+      }
+      actions={
+        can.billing && clientId ? (
+          // Replaces "Download snapshot", which produced raw JSON no finance
+          // team would open. This is the open-item statement the engine builds.
+          <Link
+            href={`/portal/documents/client-statement/${clientId}${clientQuery}`}
+            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+          >
+            Statement of account
+          </Link>
+        ) : null
       }
     >
       {confirmation ? (

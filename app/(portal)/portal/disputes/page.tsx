@@ -7,16 +7,18 @@
  * has no way of knowing, since every other screen shows them an invoice NUMBER. It
  * now picks from their own open invoices.
  *
- * Still a list rather than a conversation: there is no thread and no attachment,
- * so a dispute that ends in a status change and no explanation gets re-raised as a
- * phone call. That is the next thing this screen needs.
+ * Each row opens into the conversation behind it. Those messages were always
+ * being written -- the update route has recorded COMMENT and STATUS_CHANGE
+ * events since disputes shipped -- but nothing read them back, so a dispute that
+ * ended in a status change and no explanation got re-raised as a phone call.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { PortalDrawer } from "@/components/portal/PortalDrawer"
 import { PortalPage } from "@/components/portal/PortalPage"
 import { PortalTable, type PortalColumn } from "@/components/portal/PortalTable"
-import { StatusChip } from "@/components/portal/StatusChip"
+import { StatusChip, statusCopy } from "@/components/portal/StatusChip"
 import { usePortalScope } from "@/components/portal/portal-scope"
 import { formatDayTime, formatMoney } from "@/lib/portal-format"
 
@@ -33,6 +35,25 @@ type DisputeRow = {
   raised_at: string
   resolved_at: string | null
   raised_by_name: string | null
+}
+
+type DisputeEvent = {
+  id: number
+  event_type: string
+  from_status: string | null
+  to_status: string | null
+  comment: string | null
+  created_at: string
+  author: "you" | "warehouse"
+}
+
+type DisputeDetail = DisputeRow & {
+  currency_code: string | null
+  grand_total: number | string | null
+  resolution_notes: string | null
+  events: DisputeEvent[]
+  can_comment: boolean
+  can_change_status: boolean
 }
 
 type InvoiceOption = {
@@ -67,6 +88,13 @@ export default function PortalDisputesPage() {
   const [formError, setFormError] = useState("")
   const [saving, setSaving] = useState(false)
   const [confirmation, setConfirmation] = useState("")
+
+  const [openDispute, setOpenDispute] = useState<DisputeRow | null>(null)
+  const [detail, setDetail] = useState<DisputeDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState("")
+  const [reply, setReply] = useState("")
+  const [replying, setReplying] = useState(false)
 
   const load = useCallback(async () => {
     if (!clientId) return
@@ -111,6 +139,57 @@ export default function PortalDisputesPage() {
     void loadInvoices()
   }, [can.disputes, load, loadInvoices])
 
+  const openThread = useCallback(
+    async (row: DisputeRow) => {
+      if (!clientId) return
+      setOpenDispute(row)
+      setDetail(null)
+      setReply("")
+      setDetailError("")
+      setDetailLoading(true)
+      try {
+        const res = await fetch(`/api/portal/disputes/${row.id}?client_id=${clientId}`, {
+          cache: "no-store",
+        })
+        const json = await res.json()
+        if (!res.ok) setDetailError(json?.error?.message || "Please try again in a moment.")
+        else setDetail(json?.data as DisputeDetail)
+      } catch {
+        setDetailError("Check your connection and try again.")
+      } finally {
+        setDetailLoading(false)
+      }
+    },
+    [clientId]
+  )
+
+  async function sendReply() {
+    if (!openDispute || !clientId || reply.trim().length < 1) return
+    setReplying(true)
+    setDetailError("")
+    try {
+      const res = await fetch(`/api/portal/disputes/${openDispute.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // No status: a client replying is commenting, not resolving their own
+        // dispute. The route refuses a status change from a non-manager anyway.
+        body: JSON.stringify({ client_id: clientId, comment: reply.trim() }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        setDetailError(json?.error?.message || "Your reply was not sent.")
+      } else {
+        setReply("")
+        await openThread(openDispute)
+        await load()
+      }
+    } catch {
+      setDetailError("Your reply was not sent. Check your connection and try again.")
+    } finally {
+      setReplying(false)
+    }
+  }
+
   const columns = useMemo<Array<PortalColumn<DisputeRow>>>(
     () => [
       {
@@ -118,7 +197,15 @@ export default function PortalDisputesPage() {
         label: "Reference",
         kind: "text",
         value: (row) => row.dispute_number,
-        render: (row) => <span className="font-medium text-neutral-900">{row.dispute_number}</span>,
+        render: (row) => (
+          <button
+            type="button"
+            onClick={() => void openThread(row)}
+            className="font-medium text-blue-800 underline-offset-2 hover:underline"
+          >
+            {row.dispute_number}
+          </button>
+        ),
         card: "title",
       },
       { key: "invoice_number", label: "Invoice", kind: "text", value: (row) => row.invoice_number },
@@ -167,7 +254,7 @@ export default function PortalDisputesPage() {
         sortable: false,
       },
     ],
-    []
+    [openThread]
   )
 
   function resetForm() {
@@ -378,6 +465,117 @@ export default function PortalDisputesPage() {
           body: "If an invoice does not look right, raise a query and we will look into it.",
         }}
       />
+
+      <PortalDrawer
+        open={Boolean(openDispute)}
+        onClose={() => setOpenDispute(null)}
+        title={openDispute?.dispute_number || "Query"}
+        subtitle={openDispute ? `Invoice ${openDispute.invoice_number}` : undefined}
+        footer={
+          detail?.can_comment ? (
+            <div className="space-y-2">
+              <label htmlFor="dispute-reply" className="sr-only">
+                Add a reply
+              </label>
+              <textarea
+                id="dispute-reply"
+                rows={2}
+                value={reply}
+                onChange={(event) => setReply(event.target.value)}
+                placeholder="Add a reply..."
+                className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              />
+              <button
+                type="button"
+                onClick={sendReply}
+                disabled={replying || !reply.trim()}
+                className="w-full rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {replying ? "Sending..." : "Send reply"}
+              </button>
+            </div>
+          ) : detail ? (
+            <p className="text-xs text-neutral-500">
+              This conversation is read-only for your account. Contact your warehouse provider to reply.
+            </p>
+          ) : null
+        }
+      >
+        {detailLoading ? (
+          <div className="space-y-3">
+            {[0, 1, 2].map((row) => (
+              <div key={row} className="h-12 animate-pulse rounded bg-neutral-100" />
+            ))}
+          </div>
+        ) : detailError && !detail ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="text-sm text-red-800">{detailError}</p>
+            <button
+              type="button"
+              onClick={() => openDispute && void openThread(openDispute)}
+              className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100"
+            >
+              Try again
+            </button>
+          </div>
+        ) : detail ? (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusChip status={detail.status} />
+              {detail.dispute_amount !== null ? (
+                <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-0.5 text-xs text-neutral-700">
+                  {formatMoney(detail.dispute_amount, detail.currency_code || "INR")} in question
+                </span>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">What you told us</p>
+              <p className="mt-1 text-sm text-neutral-800">{detail.dispute_reason}</p>
+              <p className="mt-1 text-xs text-neutral-500">{formatDayTime(detail.raised_at)}</p>
+            </div>
+
+            <section>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                Conversation
+              </h3>
+              {detail.events.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500">
+                  No replies yet. We will respond against your agreed resolution target.
+                </p>
+              ) : (
+                <ul className="space-y-3">
+                  {detail.events.map((event) => {
+                    const mine = event.author === "you"
+                    return (
+                      <li key={event.id} className={mine ? "flex justify-end" : "flex justify-start"}>
+                        <div
+                          className={`max-w-[85%] rounded-xl px-3 py-2 ${
+                            mine ? "bg-blue-50 text-blue-950" : "bg-neutral-100 text-neutral-800"
+                          }`}
+                        >
+                          <p className="text-[11px] font-medium uppercase tracking-wide opacity-70">
+                            {mine ? "You" : "Warehouse team"}
+                          </p>
+                          {/* A status change with no comment still says something. */}
+                          {event.event_type === "STATUS_CHANGE" && event.to_status ? (
+                            <p className="mt-0.5 text-xs font-medium">
+                              Marked {statusCopy(event.to_status).label.toLowerCase()}
+                            </p>
+                          ) : null}
+                          {event.comment ? <p className="mt-0.5 text-sm">{event.comment}</p> : null}
+                          <p className="mt-1 text-[11px] opacity-60">{formatDayTime(event.created_at)}</p>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+              {detailError ? <p className="mt-2 text-sm text-red-700">{detailError}</p> : null}
+            </section>
+          </div>
+        ) : null}
+      </PortalDrawer>
     </PortalPage>
   )
 }

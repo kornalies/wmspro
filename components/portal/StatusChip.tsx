@@ -58,8 +58,10 @@ const STATUS_COPY: Record<string, StatusCopy> = {
   REJECTED: { label: "Rejected", tone: "attention" },
   RECEIVED: { label: "Received", tone: "done" },
 
-  // Invoices
+  // Invoices. The stored set is DRAFT/FINALIZED/SENT/PAID/VOID (ck_ih_status);
+  // the rest are derived states other screens compute.
   ISSUED: { label: "Issued", tone: "progress" },
+  FINALIZED: { label: "Issued", tone: "progress" },
   SENT: { label: "Sent", tone: "progress" },
   PARTIALLY_PAID: { label: "Part paid", tone: "attention" },
   PAID: { label: "Paid", tone: "done" },
